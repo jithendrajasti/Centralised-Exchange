@@ -1,18 +1,67 @@
 import { WS_RECONNECT_DELAY, WS_MAX_RECONNECT_ATTEMPTS } from "../lib/constants";
+import { getWsTicket, isAuthenticated } from "./httpClient";
+import { Trade } from "./types";
 
-export const BASE_URL = "ws://localhost:3001"
+const wsBaseUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001";
+const DEBUG = process.env.NODE_ENV !== "production";
+
+function log(...args: unknown[]) {
+    if (DEBUG) {
+        console.log(...args);
+    }
+}
+
+function normalizeTradeMessage(data: any): Trade | null {
+    if (!data) {
+        return null;
+    }
+
+    const price = data.price ?? data.p;
+    const quantity = data.quantity ?? data.q;
+    if (!price || !quantity) {
+        return null;
+    }
+
+    const rawTimestamp = data.timestamp ?? data.t;
+    let timestamp = Date.now();
+    if (typeof rawTimestamp === "number") {
+        timestamp = rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000;
+    }
+
+    const id = typeof data.id === "number"
+        ? data.id
+        : typeof data.t === "number"
+            ? data.t
+            : Date.now();
+
+    const isBuyerMaker = typeof data.isBuyerMaker === "boolean"
+        ? data.isBuyerMaker
+        : Boolean(data.m);
+
+    const quoteQuantity = data.quoteQuantity ?? (Number(price) * Number(quantity)).toString();
+
+    return {
+        id,
+        price: price.toString(),
+        quantity: quantity.toString(),
+        quoteQuantity: quoteQuantity.toString(),
+        timestamp,
+        isBuyerMaker,
+        symbol: data.symbol ?? data.s,
+    };
+}
 
 export class SignalingManager {
     private ws: WebSocket | null = null;
     private static instance: SignalingManager;
     private bufferedMessages: any[] = [];
-    private callbacks: any = {};
+    private callbacks: Record<string, [Function, string][]> = {};
     private id: number;
     private initialized: boolean = false;
     private reconnectAttempts: number = 0;
     private reconnectTimeout: NodeJS.Timeout | null = null;
     private shouldReconnect: boolean = true;
-    private subscriptions: string[] = [];
+    private subscriptions: Set<string> = new Set();
 
     private constructor() {
         this.id = 1;
@@ -28,8 +77,8 @@ export class SignalingManager {
 
     private connect() {
         try {
-            console.log('🔌 Connecting to Backpack WebSocket...');
-            this.ws = new WebSocket(BASE_URL);
+            log('🔌 Connecting to exchange WebSocket...');
+            this.ws = new WebSocket(wsBaseUrl);
             this.init();
         } catch (error) {
             console.error('❌ WebSocket connection error:', error);
@@ -41,8 +90,7 @@ export class SignalingManager {
         if (!this.ws) return;
 
         this.ws.onopen = () => {
-            console.log('✅ WebSocket connected to Backpack');
-            this.initialized = true;
+            log('✅ WebSocket connected');
             this.reconnectAttempts = 0;
 
             if (this.reconnectTimeout) {
@@ -50,13 +98,9 @@ export class SignalingManager {
                 this.reconnectTimeout = null;
             }
 
-            this.bufferedMessages.forEach(message => {
-                this.ws?.send(JSON.stringify(message));
-            });
-            this.bufferedMessages = [];
-
-            this.subscriptions.forEach(sub => {
-                this.ws?.send(JSON.stringify({ method: "SUBSCRIBE", params: [sub] }));
+            this.authenticateSocket().catch((error) => {
+                console.error('❌ WebSocket ticket auth failed:', error);
+                this.ws?.close();
             });
         };
 
@@ -69,8 +113,22 @@ export class SignalingManager {
                     return;
                 }
 
+                if (message.type === "AUTH_SUCCESS") {
+                    this.initialized = true;
+
+                    this.bufferedMessages.forEach(bufferedMessage => {
+                        this.ws?.send(JSON.stringify(bufferedMessage));
+                    });
+                    this.bufferedMessages = [];
+
+                    this.subscriptions.forEach(sub => {
+                        this.ws?.send(JSON.stringify({ method: "SUBSCRIBE", params: [sub] }));
+                    });
+                    return;
+                }
+
                 if (message.result === null && message.id) {
-                    console.log('✅ Subscription confirmed for id:', message.id);
+                    log('✅ Subscription confirmed for id:', message.id);
                     return;
                 }
 
@@ -80,22 +138,31 @@ export class SignalingManager {
                     const streamParts = message.stream.split('.');
                     const type = streamParts[0];
                     const symbol = streamParts.slice(1).join('.'); // Handle symbols with dots
+                    const streamKey = symbol ? `${type}.${symbol}` : type;
 
                     switch (type) {
                         case 'ticker':
-                            this.triggerCallbacks("ticker", {
-                                symbol: symbol,
-                                ...message.data
+                            this.triggerCallbacks(streamKey, {
+                                ...message.data,
+                                symbol: message.data.symbol ?? symbol,
                             });
                             break;
                         case 'depth':
-                            this.triggerCallbacks("depth", message.data);
+                            this.triggerCallbacks(streamKey, message.data);
                             break;
                         case 'trade':
-                            this.triggerCallbacks("trade", message.data);
+                            {
+                                const trade = normalizeTradeMessage({
+                                    ...message.data,
+                                    symbol: message.data.symbol ?? symbol,
+                                });
+                                if (trade) {
+                                    this.triggerCallbacks(streamKey, trade);
+                                }
+                            }
                             break;
                         default:
-                            console.log('📨 Unknown stream type:', type, 'from stream:', message.stream);
+                            log('📨 Unknown stream type:', type, 'from stream:', message.stream);
                     }
                 }
             } catch (error) {
@@ -108,7 +175,7 @@ export class SignalingManager {
         };
 
         this.ws.onclose = () => {
-            console.log('🔌 WebSocket disconnected');
+            log('🔌 WebSocket disconnected');
             this.initialized = false;
             this.handleReconnect();
         };
@@ -116,16 +183,33 @@ export class SignalingManager {
 
     private handleReconnect() {
         if (!this.shouldReconnect || this.reconnectAttempts >= WS_MAX_RECONNECT_ATTEMPTS) {
-            console.log('🛑 Max reconnection attempts reached or reconnection disabled');
+            log('🛑 Max reconnection attempts reached or reconnection disabled');
             return;
         }
 
         this.reconnectAttempts++;
-        console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${WS_MAX_RECONNECT_ATTEMPTS})...`);
+        log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${WS_MAX_RECONNECT_ATTEMPTS})...`);
 
         this.reconnectTimeout = setTimeout(() => {
             this.connect();
         }, WS_RECONNECT_DELAY);
+    }
+
+    private async authenticateSocket() {
+        if (!isAuthenticated()) {
+            throw new Error("User not authenticated — please log in");
+        }
+
+        const { ticket } = await getWsTicket();
+
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error("WebSocket closed before authentication");
+        }
+
+        this.ws.send(JSON.stringify({
+            method: "AUTH",
+            params: { ticket }
+        }));
     }
 
     private triggerCallbacks(type: string, data: any) {
@@ -138,32 +222,38 @@ export class SignalingManager {
     public sendMessage(message: any) {
         const messageWithId = { ...message, id: this.id++ };
 
-        if (message.method === "SUBSCRIBE" && message.params?.[0]) {
-            this.subscriptions.push(message.params[0]);
-        } else if (message.method === "UNSUBSCRIBE" && message.params?.[0]) {
-            this.subscriptions = this.subscriptions.filter(sub => sub !== message.params[0]);
+        const isSubscribe = message.method === "SUBSCRIBE" && message.params?.[0];
+        const isUnsubscribe = message.method === "UNSUBSCRIBE" && message.params?.[0];
+
+        if (isSubscribe) {
+            this.subscriptions.add(message.params[0]);
+        } else if (isUnsubscribe) {
+            this.subscriptions.delete(message.params[0]);
         }
 
         if (!this.initialized || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.log('⏳ WebSocket not ready, buffering message:', messageWithId);
-            this.bufferedMessages.push(messageWithId);
+            if (!isSubscribe && !isUnsubscribe) {
+                log('⏳ WebSocket not ready, buffering message:', messageWithId);
+                this.bufferedMessages.push(messageWithId);
+            }
             return;
         }
 
-        console.log('📤 Sending WebSocket message:', messageWithId);
+        log('📤 Sending WebSocket message:', messageWithId);
         this.ws.send(JSON.stringify(messageWithId));
     }
 
     public registerCallback(type: string, callback: Function, id: string) {
         this.callbacks[type] = this.callbacks[type] || [];
+        this.callbacks[type] = this.callbacks[type].filter(([, cbId]) => cbId !== id);
         this.callbacks[type].push([callback, id]);
-        console.log(`📝 Registered ${type} callback with id: ${id}`);
+        log(`📝 Registered ${type} callback with id: ${id}`);
     }
 
     public deRegisterCallback(type: string, id: string) {
         if (this.callbacks[type]) {
             this.callbacks[type] = this.callbacks[type].filter(([, cbId]: [Function, string]) => cbId !== id);
-            console.log(`🗑️ Deregistered ${type} callback with id: ${id}`);
+            log(`🗑️ Deregistered ${type} callback with id: ${id}`);
         }
     }
 
@@ -184,20 +274,8 @@ export class SignalingManager {
         }
     }
 
-    public subscribeToDepth(market: string, callback: (data: any) => void) {
-        this.registerCallback(`depth.${market}`, callback, `DEPTH-${market}`);
-    }
-
-    public subscribeToTicker(market: string, callback: (data: any) => void) {
-        this.registerCallback(`ticker.${market}`, callback, `TICKER-${market}`);
-    }
-
-    public subscribeToChart(market: string, callback: (data: any) => void) {
-        this.registerCallback(`trade.${market}`, callback, `CHART-${market}`);
-    }
-
     public destroy() {
-        console.log('🧹 Destroying SignalingManager...');
+        log('🧹 Destroying SignalingManager...');
         this.shouldReconnect = false;
 
         if (this.reconnectTimeout) {
@@ -212,7 +290,7 @@ export class SignalingManager {
 
         this.callbacks = {};
         this.bufferedMessages = [];
-        this.subscriptions = [];
+        this.subscriptions.clear();
         this.initialized = false;
     }
 }

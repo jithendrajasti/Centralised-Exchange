@@ -32,8 +32,15 @@ export class RedisManager {
     private static instance: RedisManager;
 
     constructor() {
-        this.client = createClient();
-        this.client.connect();
+        this.client = createClient({
+            url: process.env.REDIS_URL || "redis://localhost:6379",
+        });
+        this.client.on("error", (err) => {
+            console.error("Engine Redis error:", err);
+        });
+        this.client.connect().catch((err) => {
+            console.error("Engine Redis connection failed:", err);
+        });
     }
 
     public static getInstance() {

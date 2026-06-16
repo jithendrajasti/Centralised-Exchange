@@ -4,9 +4,12 @@ import { Engine } from "./trade/Engine";
 async function main() {
     const engine = new Engine(); 
     let isShuttingDown = false;
+    const logMessages = process.env.ENGINE_LOG_MESSAGES === "true";
 
     // Create Redis client with error handling
-    const redisClient = createClient();
+    const redisClient = createClient({
+        url: process.env.REDIS_URL || "redis://localhost:6379",
+    });
     
     redisClient.on('error', (err) => {
         console.error('Redis error:', err);
@@ -40,7 +43,9 @@ async function main() {
             if (response) {
                 // response.element contains the actual message
                 const message = JSON.parse(response.element);
-                console.log(`Processing message type: ${message.message?.type}`);
+                if (logMessages) {
+                    console.log(`Processing message type: ${message.message?.type}`);
+                }
                 engine.process(message);
             }
             // If no response (timeout), loop continues without CPU waste

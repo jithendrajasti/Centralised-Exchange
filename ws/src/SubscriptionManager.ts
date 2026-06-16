@@ -1,6 +1,17 @@
 import { RedisClientType, createClient } from "redis";
 import { UserManager } from "./UserManager";
 
+/* ═══════════════════════════════════════════════════════════════
+   SubscriptionManager — Redis Pub/Sub ↔ WebSocket bridge
+   
+   Improvements:
+   - Subscription limit per user (prevent abuse)
+   - Reduced verbose logging (was logging every message)
+   - Env-based Redis URL
+   ═══════════════════════════════════════════════════════════════ */
+
+const MAX_SUBSCRIPTIONS_PER_USER = 50;
+
 export class SubscriptionManager {
     private static instance: SubscriptionManager;
     private subscriptions: Map<string, string[]> = new Map();
@@ -8,58 +19,66 @@ export class SubscriptionManager {
     private redisClient: RedisClientType;
 
     private constructor() {
-        this.redisClient = createClient();
+        this.redisClient = createClient({
+            url: process.env.REDIS_URL || "redis://localhost:6379",
+        });
         this.redisClient.connect().then(() => {
-            console.log('✅ WebSocket Redis connected');
+            console.log("WS: Redis connected");
         }).catch((err) => {
-            console.error('❌ WebSocket Redis connection failed:', err);
+            console.error("WS: Redis connection failed:", err);
         });
         
-        this.redisClient.on('error', (err) => {
-            console.error('❌ WebSocket Redis error:', err);
+        this.redisClient.on("error", (err) => {
+            console.error("WS Redis error:", err);
         });
     }
 
     public static getInstance() {
-        if (!this.instance)  {
+        if (!this.instance) {
             this.instance = new SubscriptionManager();
         }
         return this.instance;
     }
 
     public subscribe(userId: string, subscription: string) {
-        console.log(`📡 User ${userId} subscribing to: ${subscription}`);
-        
+        /* ─── Prevent duplicate subscriptions ─── */
         if (this.subscriptions.get(userId)?.includes(subscription)) {
-            console.log(`⚠️ User ${userId} already subscribed to ${subscription}`);
-            return
+            return;
         }
 
-        this.subscriptions.set(userId, (this.subscriptions.get(userId) || []).concat(subscription));
-        this.reverseSubscriptions.set(subscription, (this.reverseSubscriptions.get(subscription) || []).concat(userId));
+        /* ─── Enforce subscription limit ─── */
+        const currentSubs = this.subscriptions.get(userId) || [];
+        if (currentSubs.length >= MAX_SUBSCRIPTIONS_PER_USER) {
+            console.warn(`User ${userId} exceeded max subscriptions (${MAX_SUBSCRIPTIONS_PER_USER})`);
+            return;
+        }
+
+        this.subscriptions.set(userId, currentSubs.concat(subscription));
+        this.reverseSubscriptions.set(
+            subscription,
+            (this.reverseSubscriptions.get(subscription) || []).concat(userId)
+        );
         
+        /* ─── First subscriber → subscribe to Redis channel ─── */
         if (this.reverseSubscriptions.get(subscription)?.length === 1) {
-            console.log(`🔔 First subscriber to ${subscription}, subscribing to Redis`);
             this.redisClient.subscribe(subscription, this.redisCallbackHandler);
-        } else {
-            console.log(`📊 Additional subscriber to ${subscription}, total: ${this.reverseSubscriptions.get(subscription)?.length}`);
         }
     }
 
     private redisCallbackHandler = (message: string, channel: string) => {
-        console.log(`📨 Redis message received on ${channel}:`, message.substring(0, 100) + '...');
-        const parsedMessage = JSON.parse(message);
-        const subscribers = this.reverseSubscriptions.get(channel);
-        console.log(`📤 Broadcasting to ${subscribers?.length || 0} subscribers`);
-        subscribers?.forEach(userId => {
-            const user = UserManager.getInstance().getUser(userId);
-            if (user) {
-                console.log(`📤 Sending to user ${userId}`);
-                user.emit(parsedMessage);
-            } else {
-                console.log(`⚠️ User ${userId} not found`);
-            }
-        });
+        try {
+            const parsedMessage = JSON.parse(message);
+            const subscribers = this.reverseSubscriptions.get(channel);
+            
+            subscribers?.forEach(userId => {
+                const user = UserManager.getInstance().getUser(userId);
+                if (user) {
+                    user.emit(parsedMessage);
+                }
+            });
+        } catch (err) {
+            console.error("Redis callback parse error:", err);
+        }
     }
 
     public unsubscribe(userId: string, subscription: string) {
@@ -78,7 +97,6 @@ export class SubscriptionManager {
     }
 
     public userLeft(userId: string) {
-        console.log("user left " + userId);
         this.subscriptions.get(userId)?.forEach(s => this.unsubscribe(userId, s));
     }
     

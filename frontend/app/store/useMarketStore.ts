@@ -9,7 +9,7 @@ interface MarketStore {
 }
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
-    selectedMarket: 'SOL_USD',
+    selectedMarket: 'SOL_USDC',
     setSelectedMarket: (market: string) => set({ selectedMarket: market }),
     favorites: [],
     toggleFavorite: (market: string) => set((state) => ({

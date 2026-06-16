@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # ── Infrastructure ──
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: cex-timescaledb
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${DB_NAME:-my_database}
+      POSTGRES_USER: ${DB_USER:-your_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password}
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-your_user} -d ${DB_NAME:-my_database}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cex-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── DB Seed (init container — runs once then exits) ──
+  db-seed:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+    container_name: cex-db-seed
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      DB_USER: ${DB_USER:-your_user}
+      DB_PASSWORD: ${DB_PASSWORD:-your_password}
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-my_database}
+    restart: "no"
+
+  # ── Engine ──
+  engine:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: cex-engine
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+    environment:
+      REDIS_URL: redis://redis:6379
+      WITH_SNAPSHOT: ${WITH_SNAPSHOT:-true}
+      ENGINE_LOG_MESSAGES: ${ENGINE_LOG_MESSAGES:-false}
+
+  # ── API ──
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: cex-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+      engine:
+        condition: service_started
+    environment:
+      API_PORT: 3000
+      REDIS_URL: redis://redis:6379
+      DB_USER: ${DB_USER:-your_user}
+      DB_PASSWORD: ${DB_PASSWORD:-your_password}
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-my_database}
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-change-this-access-secret-in-production}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-this-refresh-secret-in-production}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-604800}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3005}
+      NODE_ENV: ${NODE_ENV:-production}
+
+  # ── WebSocket ──
+  ws:
+    build:
+      context: .
+      dockerfile: ws/Dockerfile
+    container_name: cex-ws
+    restart: unless-stopped
+    ports:
+      - "${WS_PORT:-3001}:3001"
+    depends_on:
+      redis:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+    environment:
+      WS_PORT: 3001
+      REDIS_URL: redis://redis:6379
+
+  # ── Frontend ──
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
+    container_name: cex-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3005}:3005"
+    depends_on:
+      api:
+        condition: service_started
+      ws:
+        condition: service_started
+    environment:
+      PORT: 3005
+      HOSTNAME: 0.0.0.0
+
+volumes:
+  timescale-data:

@@ -7,9 +7,17 @@ import {
   UTCTimestamp,
 } from "lightweight-charts";
 
+const DEBUG = process.env.NODE_ENV !== "production";
+
+function log(...args: unknown[]) {
+  if (DEBUG) {
+    console.log(...args);
+  }
+}
+
 export class ChartManager {
   private candleSeries: ISeriesApi<"Candlestick">;
-  private lastUpdateTime: number = 0;
+
   private chart: IChartApi;
 
   constructor(
@@ -18,7 +26,7 @@ export class ChartManager {
     layout: { background: string; color: string }
   ) {
     try {
-      console.log('📊 Initializing chart with', initialData?.length || 0, 'candles');
+      log('📊 Initializing chart with', initialData?.length || 0, 'candles');
 
       // Create chart with v4 API
       const chart = createChart(ref, {
@@ -126,7 +134,7 @@ export class ChartManager {
             return item.time !== array[index - 1]!.time;
           });
 
-        console.log('📊 Formatted', formattedData.length, 'valid candles');
+        log('📊 Formatted', formattedData.length, 'valid candles');
 
         if (formattedData.length > 0) {
           // Final validation: ensure data is strictly ascending
@@ -140,8 +148,8 @@ export class ChartManager {
           }
 
           this.candleSeries.setData(formattedData);
-          this.lastUpdateTime = formattedData[formattedData.length - 1]!.time * 1000;
-          console.log('✅ Chart initialized with', formattedData.length, 'candles');
+
+          log('✅ Chart initialized with', formattedData.length, 'candles');
         } else {
           console.warn('⚠️ No valid candle data to display');
         }
@@ -154,7 +162,7 @@ export class ChartManager {
 
   public update(updatedPrice: any) {
     try {
-      console.log('📊 Updating chart with:', updatedPrice);
+      log('📊 Updating chart with:', updatedPrice);
       
       // Use the provided time or current time
       const updateTime = updatedPrice.time ? 
@@ -170,10 +178,9 @@ export class ChartManager {
         open: parseFloat(updatedPrice.open),
       });
 
-      // Update last update time
-      this.lastUpdateTime = updatedPrice.time || Date.now();
+
       
-      console.log('✅ Chart updated successfully');
+      log('✅ Chart updated successfully');
     } catch (error) {
       console.error('❌ Error updating chart:', error);
     }

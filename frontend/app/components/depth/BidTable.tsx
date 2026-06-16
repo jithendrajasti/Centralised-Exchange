@@ -1,52 +1,84 @@
 import { formatPrice } from "@/app/lib/utils";
 
-export const BidTable = ({ bids }: { bids: [string, string][] }) => {
-    let currentTotal = 0;
-    const bidsWithTotal: [string, string, number][] = bids.map(([price, quantity]) => {
-        currentTotal += Number(quantity);
-        return [price, quantity, currentTotal];
-    });
-    
-    const maxTotal = currentTotal;
+/* ═══════════════════════════════════════════════════════════════
+   BidTable — Buy Side of the Order Book
+   Green-tinted depth bars grow right-to-left.
+   ═══════════════════════════════════════════════════════════════ */
 
-    return (
-        <div className="flex flex-col">
-            {bidsWithTotal?.map(([price, quantity, total]) => (
-                <Bid
-                    maxTotal={maxTotal}
-                    total={total}
-                    key={price}
-                    price={price}
-                    quantity={quantity}
-                />
-            ))}
-        </div>
-    );
+interface BidTableProps {
+  bids: [string, string][];
+  /** Callback when a price row is clicked */
+  onPriceClick?: (price: string) => void;
+}
+
+export const BidTable = ({ bids, onPriceClick }: BidTableProps) => {
+  /* ─── Calculate cumulative totals ─── */
+  let currentTotal = 0;
+  const bidsWithTotal: [string, string, number][] = bids.map(
+    ([price, quantity]) => {
+      currentTotal += Number(quantity);
+      return [price, quantity, currentTotal];
+    }
+  );
+
+  const maxTotal = currentTotal;
+
+  return (
+    <div className="flex flex-col">
+      {bidsWithTotal.map(([price, quantity, total]) => (
+        <BidRow
+          key={price}
+          price={price}
+          quantity={quantity}
+          total={total}
+          maxTotal={maxTotal}
+          onClick={() => onPriceClick?.(price)}
+        />
+      ))}
+    </div>
+  );
 };
 
-function Bid({ price, quantity, total, maxTotal }: { price: string, quantity: string, total: number, maxTotal: number }) {
-    const percentage = maxTotal > 0 ? (100 * total) / maxTotal : 0;
 
-    return (
-        <div className="relative group hover:bg-backpack-bg-tertiary">
-            {/* Background Bar */}
-            <div
-                className="absolute top-0 right-0 h-full bg-bp-green/10"
-                style={{ width: `${percentage}%` }}
-            />
+/* ─── Single Bid Row ─── */
+function BidRow({
+  price,
+  quantity,
+  total,
+  maxTotal,
+  onClick,
+}: {
+  price: string;
+  quantity: string;
+  total: number;
+  maxTotal: number;
+  onClick?: () => void;
+}) {
+  const fillPercent = maxTotal > 0 ? (100 * total) / maxTotal : 0;
 
-            {/* Content */}
-            <div className="relative grid grid-cols-3 px-4 py-[5px] text-xs">
-                <div className="text-bp-green tabular-nums">
-                    {formatPrice(price, 2)}
-                </div>
-                <div className="text-right text-bp-text-secondary tabular-nums">
-                    {parseFloat(quantity).toFixed(4)}
-                </div>
-                <div className="text-right text-bp-text-tertiary tabular-nums">
-                    {total.toFixed(4)}
-                </div>
-            </div>
+  return (
+    <div
+      className="relative group cursor-pointer"
+      onClick={onClick}
+    >
+      {/* Depth Bar — grows from right */}
+      <div
+        className="absolute top-0 right-0 h-full bg-bp-green/8 transition-[width] duration-100"
+        style={{ width: `${fillPercent}%` }}
+      />
+
+      {/* Data Row */}
+      <div className="relative grid grid-cols-3 px-3 py-[3px] text-xs group-hover:bg-bp-bg-hover/50">
+        <div className="text-bp-green tabular-nums">
+          {formatPrice(price, 2)}
         </div>
-    );
+        <div className="text-right text-bp-text-secondary tabular-nums">
+          {parseFloat(quantity).toFixed(4)}
+        </div>
+        <div className="text-right text-bp-text-tertiary tabular-nums">
+          {total.toFixed(4)}
+        </div>
+      </div>
+    </div>
+  );
 }

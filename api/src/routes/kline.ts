@@ -1,26 +1,20 @@
-import { Client } from 'pg';
 import { Router } from "express";
-import { RedisManager } from "../RedisManager";
-
-const pgClient = new Client({
-    user: 'your_user',
-    host: 'localhost',
-    database: 'my_database',
-    password: 'your_password',
-    port: 5432,
-});
-
-// Connect to database with error handling
-pgClient.connect().then(() => {
-    console.log('✅ API connected to PostgreSQL');
-}).catch((err) => {
-    console.error('❌ API database connection failed:', err.message);
-});
+import { pool } from "../db/pool";
+import { parseMarketSymbol } from "../utils/validation";
 
 export const klineRouter = Router();
 
+const INTERVAL_MAP: Record<string, string> = {
+    '1m':  'klines_1m',
+    '5m':  'klines_5m',
+    '15m': 'klines_15m',
+    '1h':  'klines_1h',
+    '4h':  'klines_4h',
+    '1d':  'klines_1d',
+    '1w':  'klines_1w',
+};
+
 klineRouter.get("/", async (req, res) => {
-    // Accept both 'market' and 'symbol' parameters for compatibility
     const market = (req.query.market || req.query.symbol) as string;
     const { interval, startTime, endTime } = req.query;
 
@@ -28,38 +22,39 @@ klineRouter.get("/", async (req, res) => {
         return res.status(400).json({ error: "market or symbol parameter is required" });
     }
 
+    let normalizedMarket: string;
+    try {
+        normalizedMarket = parseMarketSymbol(market);
+    } catch (error: any) {
+        return res.status(400).json({ error: error?.message || "Invalid market" });
+    }
+
     if (!interval || !startTime || !endTime) {
         return res.status(400).json({ error: "interval, startTime, and endTime are required" });
     }
 
-    let query;
-    switch (interval) {
-        case '1m':
-            query = `SELECT * FROM klines_1m WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
-            break;
-        case '5m':
-            query = `SELECT * FROM klines_5m WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
-            break;
-        case '15m':
-            query = `SELECT * FROM klines_15m WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
-            break;
-        case '1h':
-            query = `SELECT * FROM klines_1h WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
-            break;
-        case '1w':
-            query = `SELECT * FROM klines_1w WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
-            break;
-        default:
-            return res.status(400).send('Invalid interval');
+    const startUnix = Number(startTime);
+    const endUnix = Number(endTime);
+    if (!Number.isFinite(startUnix) || !Number.isFinite(endUnix)) {
+        return res.status(400).json({ error: "startTime and endTime must be numbers" });
+    }
+    if (startUnix <= 0 || endUnix <= 0 || endUnix <= startUnix) {
+        return res.status(400).json({ error: "Invalid time range" });
     }
 
+    const tableName = INTERVAL_MAP[interval as string];
+    if (!tableName) {
+        return res.status(400).json({ error: `Invalid interval: ${interval}` });
+    }
+
+    const query = `SELECT * FROM ${tableName} WHERE bucket >= $1 AND bucket <= $2 AND currency_code = $3`;
+
     try {
-        console.log(`📊 Querying klines: ${interval} for ${market} from ${new Date(Number(startTime) * 1000)} to ${new Date(Number(endTime) * 1000)}`);
-        
-        //@ts-ignore
-        const result = await pgClient.query(query, [new Date(Number(startTime) * 1000), new Date(Number(endTime) * 1000), market]);
-        
-        console.log(`📈 Found ${result.rows.length} klines records`);
+        const result = await pool.query(query, [
+            new Date(startUnix * 1000),
+            new Date(endUnix * 1000),
+            normalizedMarket,
+        ]);
         
         const klinesData = result.rows.map(x => ({
             close: x.close.toString(),
@@ -67,16 +62,15 @@ klineRouter.get("/", async (req, res) => {
             high: x.high.toString(),
             low: x.low.toString(),
             open: x.open.toString(),
-            quoteVolume: (x.volume * x.close).toString(), // Calculate quote volume
-            start: x.bucket, // Use bucket as start time
-            trades: "1", // Default trades count
+            quoteVolume: (x.volume * x.close).toString(),
+            start: x.bucket,
+            trades: "1",
             volume: x.volume.toString(),
         }));
         
-        console.log(`📊 Returning ${klinesData.length} klines to frontend`);
         res.json(klinesData);
     } catch (err: any) {
-        console.error('❌ Klines query error:', err);
-        res.status(500).json({ error: 'Database query failed', details: err.message });
+        console.error('Klines query error:', err.message);
+        res.status(500).json({ error: 'Database query failed' });
     }
 });

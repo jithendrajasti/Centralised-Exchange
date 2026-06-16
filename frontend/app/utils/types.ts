@@ -19,13 +19,14 @@ export interface Trade {
     quantity: string;
     quoteQuantity: string;
     timestamp: number;
+    symbol?: string;
 }
 
 export interface Depth {
     bids: [string, string][];
     asks: [string, string][];
-    lastUpdateId: string;
-    timestamp: number;
+    lastUpdateId?: string;
+    timestamp?: number;
 }
 
 export interface Ticker {

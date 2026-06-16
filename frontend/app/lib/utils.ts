@@ -122,9 +122,9 @@ export function throttle<T extends (...args: any[]) => any>(
 
 export function getPriceChangeClass(change: number | string): string {
   const numChange = typeof change === 'string' ? parseFloat(change) : change;
-  if (numChange > 0) return 'text-trading-buy';
-  if (numChange < 0) return 'text-trading-sell';
-  return 'text-text-secondary';
+  if (numChange > 0) return 'text-bp-green';
+  if (numChange < 0) return 'text-bp-red';
+  return 'text-bp-text-secondary';
 }
 
 export function getPriceChangeColor(change: number | string): 'buy' | 'sell' | 'neutral' {

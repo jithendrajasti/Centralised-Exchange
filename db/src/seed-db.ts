@@ -1,39 +1,96 @@
-const { Client } = require('pg');
+import { Client } from "pg";
 
 const client = new Client({
-    user: 'your_user',
-    host: 'localhost',
-    database: 'my_database',
-    password: 'your_password',
-    port: 5432,
+    user: process.env.DB_USER || "your_user",
+    host: process.env.DB_HOST || "localhost",
+    database: process.env.DB_NAME || "my_database",
+    password: process.env.DB_PASSWORD || "your_password",
+    port: Number(process.env.DB_PORT) || 5432,
 });
+
+/* ─── Kline intervals for materialized view generation ─── */
+const KLINE_INTERVALS = [
+    { name: "klines_1m", bucket: "1 minute" },
+    { name: "klines_5m", bucket: "5 minutes" },
+    { name: "klines_15m", bucket: "15 minutes" },
+    { name: "klines_1h", bucket: "1 hour" },
+    { name: "klines_4h", bucket: "4 hours" },
+    { name: "klines_1d", bucket: "1 day" },
+    { name: "klines_1w", bucket: "1 week" },
+];
 
 async function initializeDB() {
     await client.connect();
 
-    // Drop materialized views FIRST (they depend on the table)
-    await client.query(`DROP MATERIALIZED VIEW IF EXISTS klines_1m CASCADE;`);
-    await client.query(`DROP MATERIALIZED VIEW IF EXISTS klines_1h CASCADE;`);
-    await client.query(`DROP MATERIALIZED VIEW IF EXISTS klines_1w CASCADE;`);
-    
+    // Drop materialized views first (they depend on tata_prices)
+    for (const { name } of KLINE_INTERVALS) {
+        await client.query(`DROP MATERIALIZED VIEW IF EXISTS ${name} CASCADE;`);
+    }
     console.log("Dropped existing materialized views");
 
-    // Now drop and create tata_prices table
+    // Auth tables
+    await client.query(`
+        DROP TABLE IF EXISTS auth_sessions CASCADE;
+        DROP TABLE IF EXISTS user_roles CASCADE;
+        DROP TABLE IF EXISTS roles CASCADE;
+        DROP TABLE IF EXISTS users CASCADE;
+
+        CREATE TABLE users(
+            id              UUID PRIMARY KEY,
+            email           TEXT NOT NULL UNIQUE,
+            password_hash   TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'active',
+            created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
+        CREATE TABLE roles(
+            id              SERIAL PRIMARY KEY,
+            name            TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE user_roles(
+            user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role_id         INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            PRIMARY KEY (user_id, role_id)
+        );
+
+        CREATE TABLE auth_sessions(
+            session_id          UUID PRIMARY KEY,
+            user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            refresh_token_hash  TEXT NOT NULL,
+            ip_address          TEXT,
+            user_agent          TEXT,
+            created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            expires_at          TIMESTAMP WITH TIME ZONE NOT NULL
+        );
+
+        CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id);
+        CREATE INDEX idx_auth_sessions_expires ON auth_sessions(expires_at);
+    `);
+
+    await client.query(`
+        INSERT INTO roles (name)
+        VALUES ('user'), ('admin')
+        ON CONFLICT DO NOTHING;
+    `);
+    console.log("Created auth tables");
+
+    // Trade prices hypertable
     await client.query(`
         DROP TABLE IF EXISTS "tata_prices" CASCADE;
         CREATE TABLE "tata_prices"(
             time            TIMESTAMP WITH TIME ZONE NOT NULL,
             price           DOUBLE PRECISION,
             volume          DOUBLE PRECISION,
-            currency_code   VARCHAR (10)
+            currency_code   VARCHAR (10),
+            is_buyer_maker  BOOLEAN NOT NULL DEFAULT false
         );
-        
         SELECT create_hypertable('tata_prices', 'time', 'price', 2);
     `);
-
     console.log("Created tata_prices hypertable");
 
-    // Create orders table
+    // Orders table
     await client.query(`
         DROP TABLE IF EXISTS "orders" CASCADE;
         CREATE TABLE "orders"(
@@ -46,61 +103,28 @@ async function initializeDB() {
             created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
-        
         CREATE INDEX idx_orders_market ON orders(market);
         CREATE INDEX idx_orders_created_at ON orders(created_at);
     `);
-
     console.log("Created orders table");
 
-    // Create materialized views
-    await client.query(`
-        CREATE MATERIALIZED VIEW klines_1m AS
-        SELECT
-            time_bucket('1 minute', time) AS bucket,
-            first(price, time) AS open,
-            max(price) AS high,
-            min(price) AS low,
-            last(price, time) AS close,
-            sum(volume) AS volume,
-            currency_code
-        FROM tata_prices
-        GROUP BY bucket, currency_code;
-    `);
-
-    console.log("Created klines_1m materialized view");
-
-    await client.query(`
-        CREATE MATERIALIZED VIEW klines_1h AS
-        SELECT
-            time_bucket('1 hour', time) AS bucket,
-            first(price, time) AS open,
-            max(price) AS high,
-            min(price) AS low,
-            last(price, time) AS close,
-            sum(volume) AS volume,
-            currency_code
-        FROM tata_prices
-        GROUP BY bucket, currency_code;
-    `);
-
-    console.log("Created klines_1h materialized view");
-
-    await client.query(`
-        CREATE MATERIALIZED VIEW klines_1w AS
-        SELECT
-            time_bucket('1 week', time) AS bucket,
-            first(price, time) AS open,
-            max(price) AS high,
-            min(price) AS low,
-            last(price, time) AS close,
-            sum(volume) AS volume,
-            currency_code
-        FROM tata_prices
-        GROUP BY bucket, currency_code;
-    `);
-
-    console.log("Created klines_1w materialized view");
+    // Create all kline materialized views via loop
+    for (const { name, bucket } of KLINE_INTERVALS) {
+        await client.query(`
+            CREATE MATERIALIZED VIEW ${name} AS
+            SELECT
+                time_bucket('${bucket}', time) AS bucket,
+                first(price, time) AS open,
+                max(price) AS high,
+                min(price) AS low,
+                last(price, time) AS close,
+                sum(volume) AS volume,
+                currency_code
+            FROM tata_prices
+            GROUP BY bucket, currency_code;
+        `);
+        console.log(`Created ${name} materialized view`);
+    }
 
     await client.end();
     console.log("Database initialized successfully");

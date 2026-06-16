@@ -1,4 +1,5 @@
 import { BASE_CURRENCY } from "./Engine";
+import { fromScaledToDecimal, percentChangeScaled } from "./precision";
 
 export interface Order {
     price: number;
@@ -11,7 +12,7 @@ export interface Order {
 }
 
 export interface Fill {
-    price: string;
+    price: number;
     qty: number;
     tradeId: number;
     otherUserId: string;
@@ -19,19 +20,22 @@ export interface Fill {
 }
 
 export class Orderbook {
+    private static readonly EPSILON = 0;
     bids: Order[];
     asks: Order[];
     baseAsset: string;
     quoteAsset: string = BASE_CURRENCY;
     lastTradeId: number;
     currentPrice: number;
-    lastPrice: string;
-    firstPrice: string;
-    high: string;
-    low: string;
-    volume: string;
-    quoteVolume: string;
-    trades: string;
+    lastPrice: number;
+    firstPrice: number;
+    high: number;
+    low: number;
+    volume: number;
+    quoteVolume: number;
+    trades: number;
+    private depthBids: Record<string, number> = Object.create(null);
+    private depthAsks: Record<string, number> = Object.create(null);
 
     constructor(
         baseAsset: string, 
@@ -39,26 +43,27 @@ export class Orderbook {
         asks: Order[], 
         lastTradeId: number, 
         currentPrice: number,
-        lastPrice?: string,
-        firstPrice?: string,
-        high?: string,
-        low?: string,
-        volume?: string,
-        quoteVolume?: string,
-        trades?: string
+        lastPrice?: number,
+        firstPrice?: number,
+        high?: number,
+        low?: number,
+        volume?: number,
+        quoteVolume?: number,
+        trades?: number
     ) {
         this.bids = bids;
         this.asks = asks;
         this.baseAsset = baseAsset;
         this.lastTradeId = lastTradeId || 0;
         this.currentPrice = currentPrice || 0;
-        this.lastPrice = lastPrice || currentPrice?.toString() || "0";
-        this.firstPrice = firstPrice || currentPrice?.toString() || "0";
-        this.high = high || currentPrice?.toString() || "0";
-        this.low = low || currentPrice?.toString() || "0";
-        this.volume = volume || "0";
-        this.quoteVolume = quoteVolume || "0";
-        this.trades = trades || "0";
+        this.lastPrice = lastPrice ?? currentPrice ?? 0;
+        this.firstPrice = firstPrice ?? currentPrice ?? 0;
+        this.high = high ?? currentPrice ?? 0;
+        this.low = low ?? currentPrice ?? 0;
+        this.volume = volume ?? 0;
+        this.quoteVolume = quoteVolume ?? 0;
+        this.trades = trades ?? 0;
+        this.rebuildDepth();
     }
 
     ticker() {
@@ -82,6 +87,42 @@ export class Orderbook {
         }
     }
 
+    private rebuildDepth() {
+        this.depthBids = Object.create(null);
+        this.depthAsks = Object.create(null);
+
+        for (const order of this.bids) {
+            const remaining = order.quantity - order.filled;
+            if (remaining > Orderbook.EPSILON) {
+                this.applyDepthDelta("bids", order.price, remaining);
+            }
+        }
+
+        for (const order of this.asks) {
+            const remaining = order.quantity - order.filled;
+            if (remaining > Orderbook.EPSILON) {
+                this.applyDepthDelta("asks", order.price, remaining);
+            }
+        }
+    }
+
+    private applyDepthDelta(side: "bids" | "asks", price: number, delta: number) {
+        if (!Number.isFinite(delta) || Math.abs(delta) < Orderbook.EPSILON) {
+            return;
+        }
+
+        const key = price.toString();
+        const book = side === "bids" ? this.depthBids : this.depthAsks;
+        const next = (book[key] || 0) + delta;
+
+        if (next <= Orderbook.EPSILON) {
+            delete book[key];
+            return;
+        }
+
+        book[key] = next;
+    }
+
     addOrder(order: Order): {
         executedQty: number,
         fills: Fill[]
@@ -89,7 +130,8 @@ export class Orderbook {
         if (order.side === "buy") {
             const {executedQty, fills} = this.matchBid(order); 
             order.filled = executedQty;
-            if (executedQty === order.quantity) {
+            const remaining = order.quantity - executedQty;
+            if (remaining <= Orderbook.EPSILON) {
                 return {
                     executedQty,
                     fills
@@ -103,6 +145,7 @@ export class Orderbook {
                 }
                 return a.timestamp - b.timestamp;  // Earlier time first
             });
+            this.applyDepthDelta("bids", order.price, remaining);
             return {
                 executedQty,
                 fills
@@ -110,7 +153,8 @@ export class Orderbook {
         } else {
             const {executedQty, fills} = this.matchAsk(order);
             order.filled = executedQty;
-            if (executedQty === order.quantity) {
+            const remaining = order.quantity - executedQty;
+            if (remaining <= Orderbook.EPSILON) {
                 return {
                     executedQty,
                     fills
@@ -124,6 +168,7 @@ export class Orderbook {
                 }
                 return a.timestamp - b.timestamp;  // Earlier time first
             });
+            this.applyDepthDelta("asks", order.price, remaining);
             return {
                 executedQty,
                 fills
@@ -145,8 +190,9 @@ export class Orderbook {
                 const filledQty = Math.min((order.quantity - executedQty), this.asks[i].quantity);
                 executedQty += filledQty;
                 this.asks[i].filled += filledQty;
+                this.applyDepthDelta("asks", this.asks[i].price, -filledQty);
                 fills.push({
-                    price: this.asks[i].price.toString(),
+                    price: this.asks[i].price,
                     qty: filledQty,
                     tradeId: this.lastTradeId++,
                     otherUserId: this.asks[i].userId,
@@ -155,7 +201,7 @@ export class Orderbook {
             }
         }
         for (let i = 0; i < this.asks.length; i++) {
-            if (this.asks[i].filled === this.asks[i].quantity) {
+            if (this.asks[i].filled >= this.asks[i].quantity - Orderbook.EPSILON) {
                 this.asks.splice(i, 1);
                 i--;
             }
@@ -180,8 +226,9 @@ export class Orderbook {
                 const amountRemaining = Math.min(order.quantity - executedQty, this.bids[i].quantity);
                 executedQty += amountRemaining;
                 this.bids[i].filled += amountRemaining;
+                this.applyDepthDelta("bids", this.bids[i].price, -amountRemaining);
                 fills.push({
-                    price: this.bids[i].price.toString(),
+                    price: this.bids[i].price,
                     qty: amountRemaining,
                     tradeId: this.lastTradeId++,
                     otherUserId: this.bids[i].userId,
@@ -190,7 +237,7 @@ export class Orderbook {
             }
         }
         for (let i = 0; i < this.bids.length; i++) {
-            if (this.bids[i].filled === this.bids[i].quantity) {
+            if (this.bids[i].filled >= this.bids[i].quantity - Orderbook.EPSILON) {
                 this.bids.splice(i, 1);
                 i--;
             }
@@ -201,36 +248,22 @@ export class Orderbook {
         };
     }
 
-    //TODO: Can you make this faster? Can you compute this during order matches?
     getDepth() {
         const bids: [string, string][] = [];
         const asks: [string, string][] = [];
 
-        const bidsObj: {[key: string]: number} = {};
-        const asksObj: {[key: string]: number} = {};
-
-        for (let i = 0; i < this.bids.length; i++) {
-            const order = this.bids[i];
-            if (!bidsObj[order.price]) {
-                bidsObj[order.price] = 0;
-            }
-            bidsObj[order.price] += order.quantity;
+        for (const price in this.depthBids) {
+            bids.push([
+                fromScaledToDecimal(Number(price)),
+                fromScaledToDecimal(this.depthBids[price])
+            ]);
         }
 
-        for (let i = 0; i < this.asks.length; i++) {
-            const order = this.asks[i];
-            if (!asksObj[order.price]) {
-                asksObj[order.price] = 0;
-            }
-            asksObj[order.price] += order.quantity;
-        }
-
-        for (const price in bidsObj) {
-            bids.push([price, bidsObj[price].toString()]);
-        }
-
-        for (const price in asksObj) {
-            asks.push([price, asksObj[price].toString()]);
+        for (const price in this.depthAsks) {
+            asks.push([
+                fromScaledToDecimal(Number(price)),
+                fromScaledToDecimal(this.depthAsks[price])
+            ]);
         }
 
         return {
@@ -249,6 +282,10 @@ export class Orderbook {
         const index = this.bids.findIndex(x => x.orderId === order.orderId);
         if (index !== -1) {
             const price = this.bids[index].price;
+            const remaining = this.bids[index].quantity - this.bids[index].filled;
+            if (remaining > Orderbook.EPSILON) {
+                this.applyDepthDelta("bids", price, -remaining);
+            }
             this.bids.splice(index, 1);
             return price
         }
@@ -258,23 +295,28 @@ export class Orderbook {
         const index = this.asks.findIndex(x => x.orderId === order.orderId);
         if (index !== -1) {
             const price = this.asks[index].price;
+            const remaining = this.asks[index].quantity - this.asks[index].filled;
+            if (remaining > Orderbook.EPSILON) {
+                this.applyDepthDelta("asks", price, -remaining);
+            }
             this.asks.splice(index, 1);
             return price
         }
     }
 
     getTicker() {
+        const priceChange = this.lastPrice - this.firstPrice;
         return {
-            firstPrice: this.firstPrice,
-            high: this.high,
-            lastPrice: this.lastPrice,
-            low: this.low,
-            priceChange: (Number(this.lastPrice) - Number(this.firstPrice)).toString(),
-            priceChangePercent: ((Number(this.lastPrice) - Number(this.firstPrice)) / Number(this.firstPrice) * 100).toString(),
-            quoteVolume: this.quoteVolume,
+            firstPrice: fromScaledToDecimal(this.firstPrice),
+            high: fromScaledToDecimal(this.high),
+            lastPrice: fromScaledToDecimal(this.lastPrice),
+            low: fromScaledToDecimal(this.low),
+            priceChange: fromScaledToDecimal(priceChange),
+            priceChangePercent: percentChangeScaled(this.lastPrice, this.firstPrice),
+            quoteVolume: fromScaledToDecimal(this.quoteVolume),
             symbol: this.ticker(),
-            trades: this.trades,
-            volume: this.volume
+            trades: this.trades.toString(),
+            volume: fromScaledToDecimal(this.volume)
         }
     }
 

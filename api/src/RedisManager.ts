@@ -1,7 +1,7 @@
-
+import crypto from "crypto";
 import { RedisClientType, createClient } from "redis";
 import { MessageFromOrderbook } from "./types";
-import { MessageToEngine } from "./types/to";
+import { MessageToEngine } from "@cex/shared";
 
 export class RedisManager {
     private client: RedisClientType;
@@ -9,10 +9,23 @@ export class RedisManager {
     private static instance: RedisManager;
 
     private constructor() {
-        this.client = createClient();
-        this.client.connect();
-        this.publisher = createClient();
-        this.publisher.connect();
+        const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+        this.client = createClient({ url: redisUrl });
+        this.publisher = createClient({ url: redisUrl });
+
+        this.client.on("error", (err) => {
+            console.error("API Redis error:", err);
+        });
+        this.publisher.on("error", (err) => {
+            console.error("API Redis publisher error:", err);
+        });
+
+        this.client.connect().catch((err) => {
+            console.error("API Redis connection failed:", err);
+        });
+        this.publisher.connect().catch((err) => {
+            console.error("API Redis publisher connection failed:", err);
+        });
     }
 
     public static getInstance() {
@@ -43,7 +56,7 @@ export class RedisManager {
     }
 
     public getRandomClientId() {
-        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        return crypto.randomUUID();
     }
 
 }

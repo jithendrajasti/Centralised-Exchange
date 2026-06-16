@@ -1,8 +1,17 @@
 /** @type {import('next').NextConfig} */
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const nextConfig = {
+    output: 'standalone',
     reactStrictMode: true,
     poweredByHeader: false,
     compress: true,
+    
+    // Fix workspace root detection (silences the multiple lockfiles warning)
+    outputFileTracingRoot: __dirname,
     
     // Performance optimizations
     compiler: {

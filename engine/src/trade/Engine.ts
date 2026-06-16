@@ -1,10 +1,20 @@
 import fs from "fs";
+import crypto from "crypto";
 import { RedisManager } from "../RedisManager";
 import { ORDER_UPDATE, TRADE_ADDED } from "../types/index";
-import { CANCEL_ORDER, CREATE_ORDER, GET_DEPTH, GET_OPEN_ORDERS, MessageFromApi, ON_RAMP,GET_TICKERS } from "../types/fromApi";
+import { CANCEL_ORDER, CREATE_ORDER, GET_BALANCES, GET_DEPTH, GET_OPEN_ORDERS, MessageFromApi, ON_RAMP, GET_TICKERS } from "../types/fromApi";
 import { Fill, Order, Orderbook } from "./Orderbook";
 import { TICKER_UPDATE } from "./events";
-//TODO: Avoid floats everywhere, use a decimal similar to the PayTM project for every currency
+import {
+    fromScaledToDecimal,
+    multiplyScaled,
+    scaleFromNumber,
+    scaledToNumber,
+    toScaledFromDecimal,
+} from "./precision";
+
+const SNAPSHOT_VERSION = 2;
+// Scaled integer math (see docs/adr/0001-shared-types-and-precision.md).
 export const BASE_CURRENCY = "INR";
 
 interface UserBalance {
@@ -30,42 +40,78 @@ export class Engine {
 
         if (snapshot) {
             const snapshotSnapshot = JSON.parse(snapshot.toString());
-            this.orderbooks = snapshotSnapshot.orderbooks.map((o: any) => new Orderbook(
+            const snapshotVersion = snapshotSnapshot.version ?? 1;
+            const isScaled = snapshotVersion >= SNAPSHOT_VERSION;
+
+            const normalizeOrder = (order: any): Order => ({
+                price: isScaled ? order.price : toScaledFromDecimal(String(order.price ?? 0)),
+                quantity: isScaled ? order.quantity : toScaledFromDecimal(String(order.quantity ?? 0)),
+                orderId: order.orderId,
+                filled: isScaled ? order.filled : toScaledFromDecimal(String(order.filled ?? 0)),
+                side: order.side,
+                userId: order.userId,
+                timestamp: order.timestamp
+            });
+
+            this.orderbooks = (snapshotSnapshot.orderbooks || []).map((o: any) => new Orderbook(
                 o.baseAsset, 
-                o.bids, 
-                o.asks, 
-                o.lastTradeId, 
-                o.currentPrice,
-                o.lastPrice,
-                o.firstPrice,
-                o.high,
-                o.low,
-                o.volume,
-                o.quoteVolume,
-                o.trades
+                (o.bids || []).map(normalizeOrder),
+                (o.asks || []).map(normalizeOrder),
+                o.lastTradeId || 0,
+                isScaled ? (o.currentPrice || 0) : toScaledFromDecimal(String(o.currentPrice ?? 0)),
+                isScaled ? (o.lastPrice || 0) : toScaledFromDecimal(String(o.lastPrice ?? 0)),
+                isScaled ? (o.firstPrice || 0) : toScaledFromDecimal(String(o.firstPrice ?? 0)),
+                isScaled ? (o.high || 0) : toScaledFromDecimal(String(o.high ?? 0)),
+                isScaled ? (o.low || 0) : toScaledFromDecimal(String(o.low ?? 0)),
+                isScaled ? (o.volume || 0) : toScaledFromDecimal(String(o.volume ?? 0)),
+                isScaled ? (o.quoteVolume || 0) : toScaledFromDecimal(String(o.quoteVolume ?? 0)),
+                isScaled ? (o.trades || 0) : Number(o.trades ?? 0)
             ));
-            // Restore balances from snapshot
+
             if (snapshotSnapshot.balances) {
-                this.balances = new Map(snapshotSnapshot.balances);
+                if (isScaled) {
+                    this.balances = new Map(snapshotSnapshot.balances);
+                } else {
+                    this.balances = new Map(snapshotSnapshot.balances.map(([userId, balance]: [string, UserBalance]) => {
+                        const normalized: UserBalance = {};
+                        for (const asset in balance) {
+                            normalized[asset] = {
+                                available: toScaledFromDecimal(String(balance[asset].available ?? 0)),
+                                locked: toScaledFromDecimal(String(balance[asset].locked ?? 0))
+                            };
+                        }
+                        return [userId, normalized];
+                    }));
+                }
             } else {
-                // Fallback: set base balances if snapshot doesn't have them
                 this.setBaseBalances();
             }
         } else {
             this.orderbooks = [new Orderbook(`TATA`, [], [], 0, 0)];
             this.setBaseBalances();
         }
+        // Snapshot every 30s (was 3s) — only if data changed
+        this._dirty = false;
         setInterval(() => {
-            this.saveSnapshot();
-        }, 1000 * 3);
+            if (this._dirty) {
+                this.saveSnapshot();
+                this._dirty = false;
+            }
+        }, 1000 * 30);
     }
 
+    private _dirty: boolean = false;
+
     saveSnapshot() {
-        const snapshotSnapshot = {
+        const snapshotData = {
+            version: SNAPSHOT_VERSION,
             orderbooks: this.orderbooks.map(o => o.getSnapshot()),
             balances: Array.from(this.balances.entries())
-        }
-        fs.writeFileSync("./snapshot.json", JSON.stringify(snapshotSnapshot));
+        };
+        // Async write — don't block the event loop
+        fs.writeFile("./snapshot.json", JSON.stringify(snapshotData), (err) => {
+            if (err) console.error("Snapshot write error:", err);
+        });
     }
 
     process({ message, clientId }: {message: MessageFromApi, clientId: string}) {
@@ -97,6 +143,7 @@ export class Engine {
                 try {
                     const orderId = message.data.orderId;
                     const cancelMarket = message.data.market;
+                    const requestUserId = message.data.userId;
                     const cancelOrderbook = this.orderbooks.find(o => o.ticker() === cancelMarket);
                     const baseAsset = cancelMarket.split("_")[0];
                     const quoteAsset = cancelMarket.split("_")[1];
@@ -110,6 +157,10 @@ export class Engine {
                     if (!order) {
                         console.log("No order found");
                         throw new Error("No order found");
+                    }
+
+                    if (order.userId !== requestUserId) {
+                        throw new Error("Unauthorized cancel request");
                     }
 
                     // Check if user balance exists
@@ -131,7 +182,7 @@ export class Engine {
                             type: "ORDER_CANCELLED",
                             payload: {
                                 orderId: orderId,
-                                executedQty: order.filled,
+                                executedQty: scaledToNumber(order.filled),
                                 remainingQty: 0
                             }
                         });
@@ -143,14 +194,14 @@ export class Engine {
                         const price = cancelOrderbook.cancelBid(order);
                         
                         // Calculate locked funds to unlock based on remaining quantity
-                        const lockedAmount = remainingQty * order.price;
+                        const lockedAmount = multiplyScaled(remainingQty, order.price);
                         
                         // Unlock quote currency (INR for buy orders)
                         userBalance[quoteAsset].available += lockedAmount;
                         userBalance[quoteAsset].locked -= lockedAmount;
                         
                         if (price) {
-                            this.sendUpdatedDepthAt(price.toString(), cancelMarket);
+                            this.sendUpdatedDepthAt(fromScaledToDecimal(price), cancelMarket);
                         }
                     } else {
                         // Cancel the order from orderbook first
@@ -161,7 +212,7 @@ export class Engine {
                         userBalance[baseAsset].locked -= remainingQty;
                         
                         if (price) {
-                            this.sendUpdatedDepthAt(price.toString(), cancelMarket);
+                            this.sendUpdatedDepthAt(fromScaledToDecimal(price), cancelMarket);
                         }
                     }
 
@@ -172,8 +223,8 @@ export class Engine {
                         type: "ORDER_CANCELLED",
                         payload: {
                             orderId,
-                            executedQty: order.filled,
-                            remainingQty: remainingQty
+                            executedQty: scaledToNumber(order.filled),
+                            remainingQty: scaledToNumber(remainingQty)
                         }
                     });
                     
@@ -188,7 +239,15 @@ export class Engine {
                     if (!openOrderbook) {
                         throw new Error("No orderbook found");
                     }
-                    const openOrders = openOrderbook.getOpenOrders(message.data.userId);
+                    const openOrders = openOrderbook.getOpenOrders(message.data.userId).map(order => ({
+                        orderId: order.orderId,
+                        executedQty: scaledToNumber(order.filled),
+                        price: fromScaledToDecimal(order.price),
+                        quantity: fromScaledToDecimal(order.quantity),
+                        side: order.side,
+                        userId: order.userId,
+                        timestamp: order.timestamp,
+                    }));
 
                     RedisManager.getInstance().sendToApi(clientId, {
                         type: "OPEN_ORDERS",
@@ -201,14 +260,14 @@ export class Engine {
             case ON_RAMP:
                 try {
                     const userId = message.data.userId;
-                    const amount = Number(message.data.amount);
+                    const amount = message.data.amount;
                     this.onRamp(userId, amount);
                     
                     RedisManager.getInstance().sendToApi(clientId, {
                         type: "ON_RAMP_SUCCESS",
                         payload: {
                             userId,
-                            amount
+                            amount: Number(amount)
                         }
                     });
                 } catch (e) {
@@ -240,6 +299,28 @@ export class Engine {
                         payload: {
                             bids: [],
                             asks: []
+                        }
+                    });
+                }
+                break;
+            case GET_BALANCES:
+                try {
+                    const userId = message.data.userId;
+                    const balances = this.getUserBalances(userId);
+                    RedisManager.getInstance().sendToApi(clientId, {
+                        type: "BALANCES",
+                        payload: {
+                            userId,
+                            balances
+                        }
+                    });
+                } catch (e) {
+                    console.log(e);
+                    RedisManager.getInstance().sendToApi(clientId, {
+                        type: "BALANCES",
+                        payload: {
+                            userId: message.data.userId,
+                            balances: {}
                         }
                     });
                 }
@@ -277,6 +358,20 @@ export class Engine {
         }
     }
 
+    private getUserBalances(userId: string) {
+        const balances = this.balances.get(userId) || {};
+        const normalized: UserBalance = {};
+
+        for (const asset in balances) {
+            normalized[asset] = {
+                available: scaledToNumber(balances[asset].available),
+                locked: scaledToNumber(balances[asset].locked),
+            };
+        }
+
+        return normalized;
+    }
+
     addOrderbook(orderbook: Orderbook) {
         this.orderbooks.push(orderbook);
     }
@@ -291,37 +386,44 @@ export class Engine {
             throw new Error("No orderbook found");
         }
 
-        this.checkAndLockFunds(baseAsset, quoteAsset, side, userId, quoteAsset, price, quantity);
+        // Input validation
+        const numPrice = toScaledFromDecimal(price);
+        const numQuantity = toScaledFromDecimal(quantity);
+        if (!Number.isFinite(numPrice) || numPrice <= 0) throw new Error("Invalid price");
+        if (!Number.isFinite(numQuantity) || numQuantity <= 0) throw new Error("Invalid quantity");
+        if (side !== "buy" && side !== "sell") throw new Error("Invalid side");
+
+        this.checkAndLockFunds(baseAsset, quoteAsset, side, userId, price, quantity);
 
         const order: Order = {
-            price: Number(price),
-            quantity: Number(quantity),
-            orderId: Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15),
+            price: numPrice,
+            quantity: numQuantity,
+            orderId: crypto.randomUUID(),
             filled: 0,
             side,
             userId,
             timestamp: Date.now()
-        }
+        };
         
         const { fills, executedQty } = orderbook.addOrder(order);
         this.updateBalance(userId, baseAsset, quoteAsset, side, fills, executedQty);
 
-        this.createDbTrades(fills, market, userId);
+        this.createDbTrades(fills, market, side);
         this.updateDbOrders(order, executedQty, fills, market);
-        this.publisWsDepthUpdates(fills, price, side, market);
-        this.publishWsTrades(fills, userId, market);
+        this.publisWsDepthUpdates(fills, fromScaledToDecimal(numPrice), side, market);
+        this.publishWsTrades(fills, market, side);
         this.updateTicker(market, fills);
+
+        // Mark dirty for snapshot
+        this._dirty = true;
         
-        // Send real-time depth update whenever orderbook changes
-        this.publishWsDepthUpdate(market);
-        
-        // Send immediate updates for faster broadcasting
-        setTimeout(() => {
-            this.publishWsDepthUpdate(market);
-            this.publishWsTickerUpdate(market);
-        }, 50); // 50ms delay for immediate update
-        
-        return { executedQty, fills, orderId: order.orderId };
+        const apiFills = fills.map((fill) => ({
+            price: fromScaledToDecimal(fill.price),
+            qty: scaledToNumber(fill.qty),
+            tradeId: fill.tradeId,
+        }));
+
+        return { executedQty: scaledToNumber(executedQty), fills: apiFills, orderId: order.orderId };
     }
 
     updateDbOrders(order: Order, executedQty: number, fills: Fill[], market: string) {
@@ -329,10 +431,10 @@ export class Engine {
             type: ORDER_UPDATE,
             data: {
                 orderId: order.orderId,
-                executedQty: executedQty,
+                executedQty: scaledToNumber(executedQty),
                 market: market,
-                price: order.price.toString(),
-                quantity: order.quantity.toString(),
+                price: fromScaledToDecimal(order.price),
+                quantity: fromScaledToDecimal(order.quantity),
                 side: order.side,
             }
         });
@@ -342,40 +444,47 @@ export class Engine {
                 type: ORDER_UPDATE,
                 data: {
                     orderId: fill.markerOrderId,
-                    executedQty: fill.qty
+                    executedQty: scaledToNumber(fill.qty)
                 }
             });
         });
     }
 
-    createDbTrades(fills: Fill[], market: string, userId: string) {
+    createDbTrades(fills: Fill[], market: string, side: "buy" | "sell") {
+        const isBuyerMaker = side === "sell";
         fills.forEach(fill => {
+            const quoteQuantity = multiplyScaled(fill.qty, fill.price);
             RedisManager.getInstance().pushMessage({
                 type: TRADE_ADDED,
                 data: {
                     market: market,
                     id: fill.tradeId.toString(),
-                    isBuyerMaker: fill.otherUserId === userId, // TODO: Is this right?
-                    price: fill.price,
-                    quantity: fill.qty.toString(),
-                    quoteQuantity: (fill.qty * Number(fill.price)).toString(),
+                    isBuyerMaker,
+                    price: fromScaledToDecimal(fill.price),
+                    quantity: fromScaledToDecimal(fill.qty),
+                    quoteQuantity: fromScaledToDecimal(quoteQuantity),
                     timestamp: Date.now()
                 }
             });
         });
     }
 
-    publishWsTrades(fills: Fill[], userId: string, market: string) {
+    publishWsTrades(fills: Fill[], market: string, side: "buy" | "sell") {
+        const isBuyerMaker = side === "sell";
         fills.forEach(fill => {
+            const timestamp = Date.now();
+            const quoteQuantity = fromScaledToDecimal(multiplyScaled(fill.qty, fill.price));
             RedisManager.getInstance().publishMessage(`trade.${market}`, {
                 stream: `trade.${market}`,
                 data: {
                     e: "trade",
-                    t: fill.tradeId,
-                    m: fill.otherUserId === userId, // TODO: Is this right?
-                    p: fill.price,
-                    q: fill.qty.toString(),
-                    s: market,
+                    id: fill.tradeId,
+                    price: fromScaledToDecimal(fill.price),
+                    quantity: fromScaledToDecimal(fill.qty),
+                    quoteQuantity,
+                    timestamp,
+                    isBuyerMaker,
+                    symbol: market,
                 }
             });
         });
@@ -407,9 +516,9 @@ export class Engine {
         }
         const depth = orderbook.getDepth();
         if (side === "buy") {
-            const updatedAsks = depth?.asks.filter(x => fills.map(f => f.price).includes(x[0].toString()));
+            const fillPrices = new Set(fills.map((fill) => fromScaledToDecimal(fill.price)));
+            const updatedAsks = depth?.asks.filter(x => fillPrices.has(x[0]));
             const updatedBid = depth?.bids.find(x => x[0] === price);
-            console.log("publish ws depth updates")
             RedisManager.getInstance().publishMessage(`depth.${market}`, {
                 stream: `depth.${market}`,
                 data: {
@@ -420,9 +529,9 @@ export class Engine {
             });
         }
         if (side === "sell") {
-           const updatedBids = depth?.bids.filter(x => fills.map(f => f.price).includes(x[0].toString()));
+           const fillPrices = new Set(fills.map((fill) => fromScaledToDecimal(fill.price)));
+           const updatedBids = depth?.bids.filter(x => fillPrices.has(x[0]));
            const updatedAsk = depth?.asks.find(x => x[0] === price);
-           console.log("publish ws depth updates")
            RedisManager.getInstance().publishMessage(`depth.${market}`, {
                stream: `depth.${market}`,
                data: {
@@ -434,103 +543,103 @@ export class Engine {
         }
     }
 
+    /** Safely get or initialize a user's asset balance */
+    private getOrInitBalance(userId: string, asset: string) {
+        let userBal = this.balances.get(userId);
+        if (!userBal) {
+            userBal = {};
+            this.balances.set(userId, userBal);
+        }
+        if (!userBal[asset]) {
+            userBal[asset] = { available: 0, locked: 0 };
+        }
+        return userBal[asset];
+    }
+
     updateBalance(userId: string, baseAsset: string, quoteAsset: string, side: "buy" | "sell", fills: Fill[], executedQty: number) {
         if (side === "buy") {
             fills.forEach(fill => {
-                // Update quote asset balance
-                //@ts-ignore
-                this.balances.get(fill.otherUserId)[quoteAsset].available = this.balances.get(fill.otherUserId)?.[quoteAsset].available + (fill.qty * fill.price);
+                const fillValue = multiplyScaled(fill.qty, fill.price);
 
-                //@ts-ignore
-                this.balances.get(userId)[quoteAsset].locked = this.balances.get(userId)?.[quoteAsset].locked - (fill.qty * fill.price);
-
-                // Update base asset balance
-
-                //@ts-ignore
-                this.balances.get(fill.otherUserId)[baseAsset].locked = this.balances.get(fill.otherUserId)?.[baseAsset].locked - fill.qty;
-
-                //@ts-ignore
-                this.balances.get(userId)[baseAsset].available = this.balances.get(userId)?.[baseAsset].available + fill.qty;
-
+                // Seller receives quote currency
+                this.getOrInitBalance(fill.otherUserId, quoteAsset).available += fillValue;
+                // Buyer's locked quote currency decreases
+                this.getOrInitBalance(userId, quoteAsset).locked -= fillValue;
+                // Seller's locked base asset decreases
+                this.getOrInitBalance(fill.otherUserId, baseAsset).locked -= fill.qty;
+                // Buyer receives base asset
+                this.getOrInitBalance(userId, baseAsset).available += fill.qty;
             });
-            
         } else {
             fills.forEach(fill => {
-                // Update quote asset balance
-                //@ts-ignore
-                this.balances.get(fill.otherUserId)[quoteAsset].locked = this.balances.get(fill.otherUserId)?.[quoteAsset].locked - (fill.qty * fill.price);
+                const fillValue = multiplyScaled(fill.qty, fill.price);
 
-                //@ts-ignore
-                this.balances.get(userId)[quoteAsset].available = this.balances.get(userId)?.[quoteAsset].available + (fill.qty * fill.price);
-
-                // Update base asset balance
-
-                //@ts-ignore
-                this.balances.get(fill.otherUserId)[baseAsset].available = this.balances.get(fill.otherUserId)?.[baseAsset].available + fill.qty;
-
-                //@ts-ignore
-                this.balances.get(userId)[baseAsset].locked = this.balances.get(userId)?.[baseAsset].locked - (fill.qty);
-
+                // Buyer's locked quote currency decreases
+                this.getOrInitBalance(fill.otherUserId, quoteAsset).locked -= fillValue;
+                // Seller receives quote currency
+                this.getOrInitBalance(userId, quoteAsset).available += fillValue;
+                // Buyer receives base asset
+                this.getOrInitBalance(fill.otherUserId, baseAsset).available += fill.qty;
+                // Seller's locked base asset decreases
+                this.getOrInitBalance(userId, baseAsset).locked -= fill.qty;
             });
         }
     }
 
-    checkAndLockFunds(baseAsset: string, quoteAsset: string, side: "buy" | "sell", userId: string, asset: string, price: string, quantity: string) {
+    checkAndLockFunds(baseAsset: string, quoteAsset: string, side: "buy" | "sell", userId: string, price: string, quantity: string) {
+        const numPrice = toScaledFromDecimal(price);
+        const numQuantity = toScaledFromDecimal(quantity);
+        if (!Number.isFinite(numPrice) || !Number.isFinite(numQuantity)) {
+            throw new Error("Invalid price or quantity");
+        }
+        const totalCost = multiplyScaled(numQuantity, numPrice);
+
         if (side === "buy") {
-            if ((this.balances.get(userId)?.[quoteAsset]?.available || 0) < Number(quantity) * Number(price)) {
+            const bal = this.getOrInitBalance(userId, quoteAsset);
+            if (bal.available < totalCost) {
                 throw new Error("Insufficient funds");
             }
-            //@ts-ignore
-            this.balances.get(userId)[quoteAsset].available = this.balances.get(userId)?.[quoteAsset].available - (Number(quantity) * Number(price));
-            
-            //@ts-ignore
-            this.balances.get(userId)[quoteAsset].locked = this.balances.get(userId)?.[quoteAsset].locked + (Number(quantity) * Number(price));
+            bal.available -= totalCost;
+            bal.locked += totalCost;
         } else {
-            if ((this.balances.get(userId)?.[baseAsset]?.available || 0) < Number(quantity)) {
+            const bal = this.getOrInitBalance(userId, baseAsset);
+            if (bal.available < numQuantity) {
                 throw new Error("Insufficient funds");
             }
-            //@ts-ignore
-            this.balances.get(userId)[baseAsset].available = this.balances.get(userId)?.[baseAsset].available - (Number(quantity));
-            
-            //@ts-ignore
-            this.balances.get(userId)[baseAsset].locked = this.balances.get(userId)?.[baseAsset].locked + Number(quantity);
+            bal.available -= numQuantity;
+            bal.locked += numQuantity;
         }
     }
 
-    onRamp(userId: string, amount: number) {
-        const userBalance = this.balances.get(userId);
-        if (!userBalance) {
-            this.balances.set(userId, {
-                [BASE_CURRENCY]: {
-                    available: amount,
-                    locked: 0
-                }
-            });
-        } else {
-            userBalance[BASE_CURRENCY].available += amount;
+    onRamp(userId: string, amount: string | number) {
+        const scaledAmount = toScaledFromDecimal(amount.toString());
+        if (!Number.isFinite(scaledAmount) || scaledAmount <= 0) {
+            throw new Error("Invalid on-ramp amount");
         }
+        const baseBalance = this.getOrInitBalance(userId, BASE_CURRENCY);
+        baseBalance.available += scaledAmount;
     }
 
     setBaseBalances() {
         // Frontend test users
         this.balances.set("1", {
             [BASE_CURRENCY]: {
-                available: 10000000,
+                available: scaleFromNumber(10000000),
                 locked: 0
             },
             "TATA": {
-                available: 10000000,
+                available: scaleFromNumber(10000000),
                 locked: 0
             }
         });
 
         this.balances.set("2", {
             [BASE_CURRENCY]: {
-                available: 10000000,
+                available: scaleFromNumber(10000000),
                 locked: 0
             },
             "TATA": {
-                available: 10000000,
+                available: scaleFromNumber(10000000),
                 locked: 0
             }
         });
@@ -538,44 +647,44 @@ export class Engine {
         // Market Maker virtual traders (larger balances for high-frequency trading)
         this.balances.set("5", {
             [BASE_CURRENCY]: {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             },
             "TATA": {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             }
         });
 
         this.balances.set("6", {
             [BASE_CURRENCY]: {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             },
             "TATA": {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             }
         });
 
         this.balances.set("7", {
             [BASE_CURRENCY]: {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             },
             "TATA": {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             }
         });
 
         this.balances.set("8", {
             [BASE_CURRENCY]: {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             },
             "TATA": {
-                available: 50000000,
+                available: scaleFromNumber(50000000),
                 locked: 0
             }
         });
@@ -588,43 +697,39 @@ export class Engine {
         }
 
         fills.forEach(fill => {
-            const price = Number(fill.price);
+            const price = fill.price;
             const quantity = fill.qty;
-            const quoteQuantity = price * quantity;
+            const quoteQuantity = multiplyScaled(price, quantity);
 
             // Update last price
-            orderbook.lastPrice = fill.price;
+            orderbook.lastPrice = price;
+
+            if (orderbook.firstPrice === 0) {
+                orderbook.firstPrice = price;
+            }
 
             // Update high
-            if (price > Number(orderbook.high)) {
-                orderbook.high = fill.price;
+            if (price > orderbook.high) {
+                orderbook.high = price;
             }
 
             // Update low
-            if (price < Number(orderbook.low) || orderbook.low === "0") {
-                orderbook.low = fill.price;
+            if (price < orderbook.low || orderbook.low === 0) {
+                orderbook.low = price;
             }
 
             // Update volume (base asset volume)
-            orderbook.volume = (Number(orderbook.volume) + quantity).toString();
+            orderbook.volume += quantity;
 
             // Update quote volume (quote asset volume)
-            orderbook.quoteVolume = (Number(orderbook.quoteVolume) + quoteQuantity).toString();
+            orderbook.quoteVolume += quoteQuantity;
 
             // Update trades count
-            orderbook.trades = (Number(orderbook.trades) + 1).toString();
+            orderbook.trades += 1;
         });
 
-        // Publish ticker update
+        // Single ticker publish (was 3x before — ticker+depth+setTimeout)
         this.publishWsTickerUpdate(market);
-        
-        // Also send depth update when ticker changes
-        this.publishWsDepthUpdate(market);
-        
-        // Send immediate ticker update for faster broadcasting
-        setTimeout(() => {
-            this.publishWsTickerUpdate(market);
-        }, 100); // 100ms delay for immediate update
     }
 
     publishWsTickerUpdate(market: string) {
@@ -634,23 +739,30 @@ export class Engine {
         }
 
         const ticker = orderbook.getTicker();
-        
+
+        const payload = {
+            lastPrice: ticker.lastPrice,
+            high: ticker.high,
+            low: ticker.low,
+            volume: ticker.volume,
+            quoteVolume: ticker.quoteVolume,
+            symbol: ticker.symbol,
+            priceChange: ticker.priceChange,
+            priceChangePercent: ticker.priceChangePercent,
+            firstPrice: ticker.firstPrice,
+            trades: ticker.trades,
+            id: 0,
+            e: "ticker" as const,
+        };
+
         RedisManager.getInstance().publishMessage(`ticker.${market}`, {
             stream: `ticker.${market}`,
-            data: {
-                lastPrice: ticker.lastPrice,
-                high: ticker.high,
-                low: ticker.low,
-                volume: ticker.volume,
-                quoteVolume: ticker.quoteVolume,
-                symbol: ticker.symbol,
-                priceChange: ticker.priceChange,
-                priceChangePercent: ticker.priceChangePercent,
-                firstPrice: ticker.firstPrice,
-                trades: ticker.trades,
-                id: 0,
-                e: "ticker"
-            }
+            data: payload,
+        });
+
+        RedisManager.getInstance().publishMessage("ticker.all", {
+            stream: "ticker.all",
+            data: payload,
         });
     }
 

@@ -2,33 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════
+   BACKPACK EXCHANGE — GLOBAL DESIGN SYSTEM
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Reset ─── */
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+/* ─── CSS Custom Properties (Backpack Palette) ─── */
 :root {
-  /* Backpack color palette */
-  --bg-primary: #04070f;
-  --bg-secondary: #081224;
-  --bg-tertiary: #101b33;
-  --bg-card: #0b1629;
-  --border: #16243b;
-  --border-light: #1e2f4a;
+  /* Backgrounds */
+  --bg-primary:    #0B0E11;
+  --bg-secondary:  #0E1217;
+  --bg-tertiary:   #14181E;
+  --bg-card:       #111519;
+  --bg-hover:      #1A1E25;
+  --bg-active:     #20252D;
+  --bg-input:      #14181E;
 
-  --green: #0ecb81;
-  --red: #f6465d;
-  --blue: #2962ff;
-  --purple: #7b61ff;
-  --pink: #ff1f69;
+  /* Borders */
+  --border:        #1E2329;
+  --border-light:  #2B3139;
+  --border-active: #474D57;
 
-  --text-primary: #f4f7ff;
-  --text-secondary: #9aa8c6;
-  --text-tertiary: #637397;
-  --text-disabled: #45516e;
+  /* Accent Colors */
+  --green:         #0ECB81;
+  --green-hover:   #11E890;
+  --green-bg:      rgba(14, 203, 129, 0.10);
+  --green-bg-strong: rgba(14, 203, 129, 0.20);
+
+  --red:           #F6465D;
+  --red-hover:     #FF5F74;
+  --red-bg:        rgba(246, 70, 93, 0.10);
+  --red-bg-strong: rgba(246, 70, 93, 0.20);
+
+  --blue:          #2962FF;
+  --blue-hover:    #3F73FF;
+  --blue-bg:       rgba(41, 98, 255, 0.10);
+
+  --purple:        #7B61FF;
+  --yellow:        #FCD535;
+  --orange:        #F0B90B;
+
+  /* Text */
+  --text-primary:   #EAECEF;
+  --text-secondary: #848E9C;
+  --text-tertiary:  #5E6673;
+  --text-disabled:  #474D57;
+  --text-inverse:   #0B0E11;
 }
 
+/* ─── Base HTML ─── */
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
@@ -36,20 +64,19 @@ html {
 }
 
 body {
-  margin: 0;
-  padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Roboto', sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   overflow-x: hidden;
   font-feature-settings: 'tnum' on, 'lnum' on;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-/* Smooth scrollbar */
+/* ─── Scrollbar ─── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -62,10 +89,49 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3D3E46;
+  background: var(--border-active);
 }
 
-/* Custom utilities */
+/* ─── Selection ─── */
+::selection {
+  background-color: rgba(41, 98, 255, 0.3);
+  color: var(--text-primary);
+}
+
+/* ─── Focus ─── */
+*:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* ─── Transitions ─── */
+button, a, input, select, textarea {
+  transition: all 0.12s ease;
+}
+
+/* ─── Disabled ─── */
+button:disabled, input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Number Input Spinners (remove) ─── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   CUSTOM UTILITIES
+   ═══════════════════════════════════════════════════════════════ */
+
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -81,64 +147,35 @@ body {
   }
 }
 
-/* Selection */
-::selection {
-  background-color: rgba(41, 98, 255, 0.3);
-  color: var(--text-primary);
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Price Flash (Green) ─── */
+@keyframes flashGreen {
+  0%   { background-color: rgba(14, 203, 129, 0.25); }
+  100% { background-color: transparent; }
 }
 
-/* Focus styles */
-*:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
-  border-radius: 4px;
+.flash-green {
+  animation: flashGreen 0.6s ease-out;
 }
 
-/* Smooth transitions */
-button, a, input, select, textarea {
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+/* ─── Price Flash (Red) ─── */
+@keyframes flashRed {
+  0%   { background-color: rgba(246, 70, 93, 0.25); }
+  100% { background-color: transparent; }
 }
 
-/* Disabled states */
-button:disabled, input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.flash-red {
+  animation: flashRed 0.6s ease-out;
 }
 
-/* Input styles */
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-input[type="number"] {
-  -moz-appearance: textfield;
-}
-
-/* Checkbox styles */
-input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-input[type="checkbox"]:checked {
-  background-color: var(--blue);
-  border-color: var(--blue);
-}
-
-/* Loading shimmer animation */
+/* ─── Shimmer Loading ─── */
 @keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
 .loading-shimmer {
@@ -150,4 +187,143 @@ input[type="checkbox"]:checked {
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
+}
+
+/* ─── Ticker Tape Scroll ─── */
+@keyframes tickerScroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-scroll {
+  animation: tickerScroll 30s linear infinite;
+}
+
+.ticker-scroll:hover {
+  animation-play-state: paused;
+}
+
+/* ─── Fade In ─── */
+@keyframes fadeIn {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* ─── Slide Up ─── */
+@keyframes slideUp {
+  0%   { transform: translateY(4px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.2s ease-out;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   COMPONENT BASE STYLES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Percentage Slider ─── */
+.slider-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  position: relative;
+  cursor: pointer;
+}
+
+.slider-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.1s ease;
+}
+
+.slider-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid;
+  background: var(--bg-primary);
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  transition: box-shadow 0.15s ease;
+}
+
+.slider-thumb:hover {
+  box-shadow: 0 0 0 4px rgba(14, 203, 129, 0.15);
+}
+
+.slider-thumb:active {
+  cursor: grabbing;
+  box-shadow: 0 0 0 6px rgba(14, 203, 129, 0.2);
+}
+
+.slider-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: background 0.15s ease;
+}
+
+.slider-dot.active {
+  background: currentColor;
+}
+
+/* ─── Sentiment Bar ─── */
+.sentiment-bar {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  display: flex;
+}
+
+.sentiment-bar .bid-fill {
+  background: var(--green);
+  transition: width 0.3s ease;
+}
+
+.sentiment-bar .ask-fill {
+  background: var(--red);
+  transition: width 0.3s ease;
+}
+
+/* ─── Bottom Panel Resize Handle ─── */
+.resize-handle {
+  height: 4px;
+  cursor: ns-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+  position: relative;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover {
+  background: var(--bg-hover);
+}
+
+.resize-handle:hover::after {
+  background: var(--border-active);
 }
