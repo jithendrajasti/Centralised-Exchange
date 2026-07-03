@@ -24,6 +24,7 @@ type DbMessage = {
         price?: string,
         quantity?: string,
         side?: "buy" | "sell",
+        userId?: string,
     }
 }
 
@@ -51,7 +52,17 @@ export class RedisManager {
     }
   
     public pushMessage(message: DbMessage) {
-        this.client.lPush("db_processor", JSON.stringify(message));
+        // XADD writes to the Redis Stream. "*" = auto-generate a timestamp-based ID.
+        // The DB Processor will XACK this ID after successfully writing to Postgres,
+        // so if it crashes mid-write the message is automatically re-delivered.
+        // MAXLEN ~10000: approximate trim keeps ~10min of messages at peak load;
+        // prevents stream from growing forever and exhausting Redis RAM.
+        this.client.xAdd(
+            "db_processor",
+            "*",
+            { data: JSON.stringify(message) },
+            { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10000 } }
+        );
     }
 
     public publishMessage(channel: string, message: WsMessage) {

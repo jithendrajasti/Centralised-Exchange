@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { cn } from "../lib/utils";
 import { formatPrice, formatTime } from "../lib/utils";
-import { getBalances, getOpenOrders, getTrades, cancelOrder } from "../utils/httpClient";
+import { getBalances, getOpenOrders, getTrades, cancelOrder, getOrderHistory, getTickers } from "../utils/httpClient";
 import { Trade } from "../utils/types";
+import { useAuthStore } from "../store/useAuthStore";
 
 /* ═══════════════════════════════════════════════════════════════
    BottomPanel — Orders, Balances & History (Backpack Style)
@@ -24,6 +25,7 @@ type BalanceRow = {
   total: number;
   available: number;
   inOrder: number;
+  usdValue: number;
 };
 
 type OpenOrderRow = {
@@ -119,26 +121,48 @@ function BalancesTab() {
   const [balances, setBalances] = useState<BalanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { isAuthenticated } = useAuthStore();
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setLoading(false);
+      setError("Sign in to view your balances");
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    getBalances()
-      .then((response) => {
+    Promise.all([getBalances(), getTickers().catch(() => [])])
+      .then(([response, tickers]) => {
         if (cancelled) return;
-        const rows = Object.entries(response.balances || {}).map(([asset, balance]) => ({
-          asset,
-          total: Number(balance.available) + Number(balance.locked),
-          available: Number(balance.available),
-          inOrder: Number(balance.locked),
-        }));
+        
+        // Build a map of prices against USDC
+        const priceMap: Record<string, number> = { "USDC": 1.0 };
+        tickers.forEach(t => {
+          if (t.symbol.endsWith("_USDC")) {
+            const base = t.symbol.split("_")[0];
+            priceMap[base] = parseFloat(t.lastPrice || "0");
+          }
+        });
+
+        const rows = Object.entries(response.balances || {}).map(([asset, balance]) => {
+          const total = Number(balance.available) + Number(balance.locked);
+          const price = priceMap[asset] || 0;
+          return {
+            asset,
+            total,
+            available: Number(balance.available),
+            inOrder: Number(balance.locked),
+            usdValue: total * price
+          };
+        });
         setBalances(rows);
       })
       .catch((e) => {
         if (cancelled) return;
-        setError(e?.message || "Connect your wallet to view balances");
+        setError(e?.message || "Failed to load balances");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -147,7 +171,7 @@ function BalancesTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthenticated]);
 
   return (
     <div className="w-full">
@@ -173,7 +197,7 @@ function BalancesTab() {
               <div className="text-right tabular-nums">{balance.total.toFixed(4)}</div>
               <div className="text-right tabular-nums">{balance.available.toFixed(4)}</div>
               <div className="text-right tabular-nums">{balance.inOrder.toFixed(4)}</div>
-              <div className="text-right tabular-nums">-</div>
+              <div className="text-right tabular-nums">${balance.usdValue.toFixed(2)}</div>
             </div>
           ))}
         </div>
@@ -189,8 +213,16 @@ function OpenOrdersTab({ market }: { market: string }) {
   const [message, setMessage] = useState("Loading open orders...");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const { isAuthenticated } = useAuthStore();
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setLoading(false);
+      setMessage("Sign in to view your open orders");
+      setOrders([]);
+      return;
+    }
+
     const controller = new AbortController();
     
     const fetchOrders = (signal?: AbortSignal) => {
@@ -203,7 +235,7 @@ function OpenOrdersTab({ market }: { market: string }) {
         .catch((e) => {
           if (signal?.aborted) return;
           setOrders([]);
-          setMessage(e?.message || "Sign in to view open orders");
+          setMessage(e?.message || "Failed to load open orders");
         })
         .finally(() => {
           if (!signal?.aborted) setLoading(false);
@@ -219,7 +251,7 @@ function OpenOrdersTab({ market }: { market: string }) {
       controller.abort();
       clearInterval(interval);
     };
-  }, [market]);
+  }, [market, isAuthenticated]);
 
   const handleCancel = async (order: OpenOrderRow) => {
     setCancellingId(order.orderId);
@@ -296,18 +328,27 @@ function OpenOrdersTab({ market }: { market: string }) {
 
 /** Order History Tab */
 function OrderHistoryTab({ market }: { market: string }) {
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [emptyMessage, setEmptyMessage] = useState("No order history yet");
+  const { isAuthenticated } = useAuthStore();
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setLoading(false);
+      setEmptyMessage("Sign in to view your order history");
+      setOrders([]);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
-    getTrades(market)
+    getOrderHistory(market)
       .then((response) => {
-        if (!cancelled) setTrades(response.slice(0, 20));
+        if (!cancelled) setOrders(response);
       })
       .catch(() => {
-        if (!cancelled) setTrades([]);
+        if (!cancelled) setOrders([]);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -315,7 +356,7 @@ function OrderHistoryTab({ market }: { market: string }) {
     return () => {
       cancelled = true;
     };
-  }, [market]);
+  }, [market, isAuthenticated]);
 
   return (
     <div className="w-full">
@@ -331,22 +372,26 @@ function OrderHistoryTab({ market }: { market: string }) {
       </div>
 
       {loading && <EmptyState message="Loading..." />}
-      {!loading && trades.length === 0 && <EmptyState message="No order history yet" />}
-      {!loading && trades.length > 0 && (
+      {!loading && orders.length === 0 && <EmptyState message={emptyMessage} />}
+      {!loading && orders.length > 0 && (
         <div className="divide-y divide-bp-border">
-          {trades.map((trade) => (
-            <div key={trade.id} className="grid grid-cols-7 px-4 py-2 text-xs text-bp-text-secondary">
-              <div className="tabular-nums">{formatTime(trade.timestamp, "time")}</div>
-              <div>{market.replace("_", "/")}</div>
-              <div>Market</div>
-              <div className={cn(trade.isBuyerMaker ? "text-bp-red" : "text-bp-green")}>
-                {trade.isBuyerMaker ? "SELL" : "BUY"}
+          {orders.map((order) => {
+            const isFilled = parseFloat(order.executedQty) >= parseFloat(order.quantity);
+            const status = isFilled ? "Filled" : (parseFloat(order.executedQty) > 0 ? "Partially Filled" : "Cancelled/Expired");
+            return (
+              <div key={order.orderId} className="grid grid-cols-7 px-4 py-2 text-xs text-bp-text-secondary hover:bg-bp-bg-secondary transition-colors">
+                <div className="tabular-nums">{formatTime(new Date(order.createdAt).getTime(), "time")}</div>
+                <div>{order.market.replace("_", "/")}</div>
+                <div>Limit</div>
+                <div className={cn(order.side === "sell" ? "text-bp-red" : "text-bp-green")}>
+                  {order.side.toUpperCase()}
+                </div>
+                <div className="text-right tabular-nums">{formatPrice(order.price, 2)}</div>
+                <div className="text-right tabular-nums">{Number(order.quantity).toFixed(4)}</div>
+                <div className="text-right text-bp-text-tertiary">{status}</div>
               </div>
-              <div className="text-right tabular-nums">{formatPrice(trade.price, 2)}</div>
-              <div className="text-right tabular-nums">{Number(trade.quantity).toFixed(4)}</div>
-              <div className="text-right text-bp-text-tertiary">Filled</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

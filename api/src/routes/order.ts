@@ -6,6 +6,7 @@ import { requireRoles } from "../middleware/authorize";
 import { createRateLimiter } from "../middleware/rateLimit";
 import { auditLog } from "../utils/audit";
 import { parseMarketSymbol, parseOrderSide, parsePositiveNumber, parseRequiredString } from "../utils/validation";
+import { pool } from "../db/pool";
 
 /* ═══════════════════════════════════════════════════════════════
    Order Route — Create, cancel, and query orders
@@ -51,6 +52,10 @@ orderRouter.post("/", authenticate, requireRoles(["user", "admin"]), orderWriteL
                 userId,
             }
         });
+
+        if (response.type === "ORDER_REJECTED") {
+            return res.status(400).json({ error: "Order rejected", message: response.payload.reason });
+        }
 
         auditLog({
             event: "order.create",
@@ -148,5 +153,39 @@ orderRouter.get("/open", authenticate, requireRoles(["user", "admin"]), orderRea
                 message: error?.message || 'Engine timeout'
             });
         }
+    }
+});
+
+orderRouter.get("/history", authenticate, requireRoles(["user", "admin"]), orderReadLimiter, async (req, res) => {
+    try {
+        const userId = req.auth!.userId;
+        const market = req.query.market; // Optional
+        
+        let query = 'SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50';
+        let values: any[] = [userId];
+
+        if (market) {
+            query = 'SELECT * FROM orders WHERE user_id = $1 AND market = $2 ORDER BY created_at DESC LIMIT 50';
+            values = [userId, parseMarketSymbol(market)];
+        }
+
+        const dbResult = await pool.query(query, values);
+        
+        // Map database columns to standard casing
+        const orders = dbResult.rows.map(row => ({
+            orderId: row.order_id,
+            market: row.market,
+            price: row.price,
+            quantity: row.quantity,
+            side: row.side,
+            executedQty: row.executed_qty,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+        }));
+        
+        res.json(orders);
+    } catch (error: any) {
+        console.error('Get order history error:', error?.message);
+        res.status(500).json({ error: 'Failed to get order history' });
     }
 });

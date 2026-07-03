@@ -16,7 +16,7 @@ async function seedSampleData() {
         console.log('✅ Connected to PostgreSQL');
         
         // Clear existing data
-        await client.query('DELETE FROM tata_prices');
+        await client.query('DELETE FROM sol_usdc_prices');
         console.log('🗑️ Cleared existing data');
         
         // Generate sample data for the last 7 days
@@ -71,12 +71,12 @@ async function seedSampleData() {
             const batchSize = 1000;
             for (let i = 0; i < trades.length; i += batchSize) {
                 const batch = trades.slice(i, i + batchSize);
-                const values = batch.map(trade => 
-                    `('${trade.time.toISOString()}', ${trade.price}, ${trade.volume}, '${trade.currency_code}')`
+                const values = batch.map((trade, idx) => 
+                    `('${trade.time.toISOString()}', 'sample-${currentTime.getTime()}-${i}-${idx}', ${trade.price}, ${trade.volume}, '${trade.currency_code}')`
                 ).join(',');
                 
                 await client.query(`
-                    INSERT INTO tata_prices (time, price, volume, currency_code) 
+                    INSERT INTO sol_usdc_prices (time, trade_id, price, volume, currency_code) 
                     VALUES ${values}
                 `);
             }
@@ -97,7 +97,7 @@ async function seedSampleData() {
         // Check results
         const klines1m = await client.query('SELECT COUNT(*) FROM klines_1m');
         const klines1h = await client.query('SELECT COUNT(*) FROM klines_1h');
-        const totalTrades = await client.query('SELECT COUNT(*) FROM tata_prices');
+        const totalTrades = await client.query('SELECT COUNT(*) FROM sol_usdc_prices');
         
         console.log('📊 Results:');
         console.log(`   Total trades: ${totalTrades.rows[0].count}`);

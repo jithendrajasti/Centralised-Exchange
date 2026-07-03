@@ -18,5 +18,6 @@ export type DbMessage = {
         price?: string,
         quantity?: string,
         side?: "buy" | "sell",
+        userId?: string,
     }
 }

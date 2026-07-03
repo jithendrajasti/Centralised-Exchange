@@ -15,24 +15,24 @@ async function testDbConnection() {
         await pgClient.connect();
         console.log('✅ Connected to PostgreSQL');
         
-        // Check if tata_prices table exists
+        // Check if sol_usdc_prices table exists
         const tableCheck = await pgClient.query(`
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'tata_prices'
+                WHERE table_name = 'sol_usdc_prices'
             );
         `);
         
-        console.log('📊 tata_prices table exists:', tableCheck.rows[0].exists);
+        console.log('📊 sol_usdc_prices table exists:', tableCheck.rows[0].exists);
         
         if (tableCheck.rows[0].exists) {
             // Check if there's any data
-            const dataCheck = await pgClient.query('SELECT COUNT(*) FROM tata_prices');
-            console.log('📈 Records in tata_prices:', dataCheck.rows[0].count);
+            const dataCheck = await pgClient.query('SELECT COUNT(*) FROM sol_usdc_prices');
+            console.log('📈 Records in sol_usdc_prices:', dataCheck.rows[0].count);
             
             // Show recent trades
             const recentTrades = await pgClient.query(`
-                SELECT * FROM tata_prices 
+                SELECT * FROM sol_usdc_prices 
                 ORDER BY time DESC 
                 LIMIT 5
             `);
@@ -43,7 +43,7 @@ async function testDbConnection() {
                     console.log(`   ${i + 1}. ${trade.time} - ${trade.price} (${trade.volume})`);
                 });
             } else {
-                console.log('❌ No trades found in tata_prices table');
+                console.log('❌ No trades found in sol_usdc_prices table');
             }
         }
         

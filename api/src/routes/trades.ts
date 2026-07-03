@@ -1,10 +1,18 @@
 import { Router } from "express";
 import { pool } from "../db/pool";
 import { parseMarketSymbol, parsePositiveNumber } from "../utils/validation";
+import { createRateLimiter } from "../middleware/rateLimit";
 
 export const tradesRouter = Router();
 
-tradesRouter.get("/", async (req, res) => {
+const publicReadLimiter = createRateLimiter({
+    keyPrefix: "rl:trades:read",
+    max: 600,
+    windowSeconds: 60,
+    keyGenerator: (req) => req.ip || "unknown",
+});
+
+tradesRouter.get("/", publicReadLimiter, async (req, res) => {
     const market = (req.query.market || req.query.symbol) as string;
     
     if (!market) {

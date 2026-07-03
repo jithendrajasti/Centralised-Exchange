@@ -46,9 +46,9 @@ async function testDbProcessor() {
     });
     
     // Subscribe to common channels
-    await subscriber.subscribe('depth.TATA_INR');
-    await subscriber.subscribe('ticker.TATA_INR');
-    await subscriber.subscribe('trade.TATA_INR');
+    await subscriber.subscribe('depth.SOL_USDC');
+    await subscriber.subscribe('ticker.SOL_USDC');
+    await subscriber.subscribe('trade.SOL_USDC');
     
     console.log('👂 Listening for messages on Redis channels...');
     console.log('⏰ Waiting 10 seconds for messages...');

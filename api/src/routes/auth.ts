@@ -12,6 +12,7 @@ const authAttemptLimiter = createRateLimiter({
     keyPrefix: "rl:auth:attempt",
     max: 20,
     windowSeconds: 60,
+    // Key by IP for login/register (email not yet parsed)
 });
 
 const authRefreshLimiter = createRateLimiter({
@@ -25,6 +26,18 @@ const wsTicketLimiter = createRateLimiter({
     max: 30,
     windowSeconds: 60,
     keyGenerator: (req) => req.auth?.userId || req.ip || "unknown",
+});
+
+// OTP-specific limiter: keyed by email+IP to prevent false lockouts for shared NAT
+const otpLimiter = createRateLimiter({
+    keyPrefix: "rl:auth:otp",
+    max: 5,
+    windowSeconds: 300, // 5 per 5 minutes per email+IP
+    keyGenerator: (req) => {
+        const email = (req.body?.email as string | undefined)?.toLowerCase().trim() || "unknown";
+        const ip = req.ip || "unknown";
+        return `${email}:${ip}`;
+    },
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -236,7 +249,7 @@ authRouter.post("/logout", async (req, res) => {
 });
 
 /* ─── Verify Email OTP (completes signup) ─── */
-authRouter.post("/verify-otp", authAttemptLimiter, async (req, res) => {
+authRouter.post("/verify-otp", otpLimiter, async (req, res) => {
     try {
         const email = parseRequiredString(req.body?.email, "email");
         const otp = parseRequiredString(req.body?.otp, "otp");
@@ -272,7 +285,7 @@ authRouter.post("/verify-otp", authAttemptLimiter, async (req, res) => {
 });
 
 /* ─── Resend Verification OTP ─── */
-authRouter.post("/resend-otp", authAttemptLimiter, async (req, res) => {
+authRouter.post("/resend-otp", otpLimiter, async (req, res) => {
     try {
         const email = parseRequiredString(req.body?.email, "email");
         await AuthService.getInstance().sendVerificationOTP(email);
@@ -292,7 +305,7 @@ authRouter.post("/resend-otp", authAttemptLimiter, async (req, res) => {
 });
 
 /* ─── Forgot Password ─── */
-authRouter.post("/forgot-password", authAttemptLimiter, async (req, res) => {
+authRouter.post("/forgot-password", otpLimiter, async (req, res) => {
     try {
         const email = parseRequiredString(req.body?.email, "email");
         await AuthService.getInstance().sendResetOTP(email);

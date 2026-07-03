@@ -51,7 +51,16 @@ export class RedisManager {
                 resolve(JSON.parse(message));
             });
             
-            this.publisher.lPush("messages", JSON.stringify({ clientId: id, message }));
+            // XADD pushes to the Redis Stream (persisted, replayable).
+            // The Engine will XACK this message ID after processing it.
+            // Stream name is "engine_messages" to distinguish from the old List "messages".
+            // MAXLEN ~10000: approximate trim keeps ~10min of messages at peak load.
+            this.publisher.xAdd(
+                "engine_messages",
+                "*",
+                { clientId: id, data: JSON.stringify(message) },
+                { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10000 } }
+            );
         });
     }
 

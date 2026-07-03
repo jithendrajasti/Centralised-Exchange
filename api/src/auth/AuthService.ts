@@ -93,13 +93,17 @@ export class AuthService {
     private static instance: AuthService;
 
     private constructor() {
-        if (process.env.NODE_ENV === "production") {
-            if (ACCESS_TOKEN_SECRET === "dev-access-secret-change-me") {
-                throw new Error("ACCESS_TOKEN_SECRET must be set in production");
-            }
-            if (REFRESH_TOKEN_SECRET === "dev-refresh-secret-change-me") {
-                throw new Error("REFRESH_TOKEN_SECRET must be set in production");
-            }
+        if (!ACCESS_TOKEN_SECRET || ACCESS_TOKEN_SECRET.length < 32) {
+            throw new Error(
+                "ACCESS_TOKEN_SECRET must be set and at least 32 characters long. " +
+                "Current value is missing or too short."
+            );
+        }
+        if (!REFRESH_TOKEN_SECRET || REFRESH_TOKEN_SECRET.length < 32) {
+            throw new Error(
+                "REFRESH_TOKEN_SECRET must be set and at least 32 characters long. " +
+                "Current value is missing or too short."
+            );
         }
     }
 

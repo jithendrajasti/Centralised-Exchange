@@ -38,4 +38,23 @@ export class UserManager {
     public getUser(id: string) {
         return this.users.get(id);
     }
+
+    /** Find the internal map key for a given WebSocket connection */
+    public getInternalIdByWs(ws: WebSocket): string | undefined {
+        for (const [id, user] of this.users) {
+            if (user.ws === ws) return id;
+        }
+        return undefined;
+    }
+
+    /** After a successful ticket auth, upgrade the user's authId from 'guest' to their real userId */
+    public upgradeUserId(ws: WebSocket, realUserId: string) {
+        const internalId = this.getInternalIdByWs(ws);
+        if (internalId) {
+            const user = this.users.get(internalId);
+            if (user) {
+                user.setAuthId(realUserId);
+            }
+        }
+    }
 }

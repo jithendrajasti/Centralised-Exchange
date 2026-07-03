@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChartManager } from "../utils/ChartManager";
+import { ChartManager, ChartType } from "../utils/ChartManager";
 import { getKlines, getTicker } from "../utils/httpClient";
 import { KLine, Trade } from "../utils/types";
 import { CHART_INTERVALS } from "../lib/constants";
 import { cn } from "../lib/utils";
 import { SignalingManager } from "../utils/SignalingManager";
+import { Depth } from "./depth/Depth";
+import { formatPrice, formatVolume, formatPercentage } from "../lib/utils";
 
 /* ═══════════════════════════════════════════════════════════════
    TradeView — Candlestick Chart Area (Backpack Exchange Style)
@@ -85,6 +87,7 @@ export function TradeView({ market }: { market: string }) {
   const currentCandleRef = useRef<any>(null);
   const [selectedInterval, setSelectedInterval] = useState("1h");
   const [activeView, setActiveView] = useState<ViewTab>("chart");
+  const [chartType, setChartType] = useState<ChartType>("candlestick");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,10 +146,12 @@ export function TradeView({ market }: { market: string }) {
             close: parseFloat(kline.close),
           }));
 
-          const chartManager = new ChartManager(chartRef.current, chartData, {
-            background: "#0B0E11",
-            color: "#848E9C",
-          });
+          const chartManager = new ChartManager(
+            chartRef.current,
+            chartData,
+            { background: "#0B0E11", color: "#848E9C" },
+            chartType
+          );
 
           chartManagerRef.current = chartManager;
           if (chartData.length > 0) {
@@ -217,7 +222,7 @@ export function TradeView({ market }: { market: string }) {
         params: [`trade.${market}`],
       });
     };
-  }, [market, selectedInterval, activeView]);
+  }, [market, selectedInterval, activeView, chartType]);
 
   return (
     <div className="flex flex-col h-full">
@@ -273,7 +278,33 @@ export function TradeView({ market }: { market: string }) {
         {/* ─── Chart Tools (right side) ─── */}
         {activeView === "chart" && (
           <div className="flex items-center gap-1">
-            <ChartToolButton icon="candle" />
+            {/* Chart type toggle */}
+            <div className="flex items-center gap-0.5 bg-bp-bg-tertiary rounded p-0.5 mr-1">
+              <button
+                onClick={() => setChartType("candlestick")}
+                title="Candlestick"
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  chartType === "candlestick"
+                    ? "bg-bp-bg-secondary text-bp-text-primary"
+                    : "text-bp-text-tertiary hover:text-bp-text-secondary"
+                )}
+              >
+                <CandleIcon />
+              </button>
+              <button
+                onClick={() => setChartType("line")}
+                title="Line"
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  chartType === "line"
+                    ? "bg-bp-bg-secondary text-bp-text-primary"
+                    : "text-bp-text-tertiary hover:text-bp-text-secondary"
+                )}
+              >
+                <LineChartIcon />
+              </button>
+            </div>
             <ChartToolButton icon="indicators" />
             <ChartToolButton icon="settings" />
           </div>
@@ -318,21 +349,17 @@ export function TradeView({ market }: { market: string }) {
           </>
         )}
 
-        {/* Depth View Placeholder */}
+        {/* Depth View */}
         {activeView === "depth" && (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-bp-text-tertiary text-xs">
-              Depth chart coming soon
-            </p>
+          <div className="h-full overflow-hidden">
+            <Depth market={market} />
           </div>
         )}
 
-        {/* Info View Placeholder */}
+        {/* Info View */}
         {activeView === "info" && (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-bp-text-tertiary text-xs">
-              Market information coming soon
-            </p>
+          <div className="h-full overflow-y-auto p-4">
+            <MarketInfoPanel market={market} />
           </div>
         )}
       </div>
@@ -371,16 +398,9 @@ function ViewTabButton({
 }
 
 /** Chart Tool Button */
-function ChartToolButton({ icon }: { icon: string }) {
+function ChartToolButton({ icon }: { icon: "indicators" | "settings" }) {
   return (
     <button className="p-1.5 text-bp-text-tertiary hover:text-bp-text-secondary transition-colors rounded hover:bg-bp-bg-tertiary">
-      {icon === "candle" && (
-        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-          <rect x="5" y="4" width="2" height="16" rx="1" />
-          <rect x="11" y="8" width="2" height="8" rx="1" />
-          <rect x="17" y="6" width="2" height="12" rx="1" />
-        </svg>
-      )}
       {icon === "indicators" && (
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeWidth={1.5} d="M3 17l6-6 4 4 8-8" />
@@ -395,6 +415,27 @@ function ChartToolButton({ icon }: { icon: string }) {
   );
 }
 
+
+/** Candle Chart Icon */
+function CandleIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <rect x="5" y="4" width="2" height="16" rx="1" />
+      <rect x="11" y="8" width="2" height="8" rx="1" />
+      <rect x="17" y="6" width="2" height="12" rx="1" />
+    </svg>
+  );
+}
+
+/** Line Chart Icon */
+function LineChartIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <polyline points="3 17 9 11 13 15 21 7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** Loading Spinner */
 function LoadingSpinner() {
   return (
@@ -402,5 +443,92 @@ function LoadingSpinner() {
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>
+  );
+}
+
+/** Market Info Panel */
+function MarketInfoPanel({ market }: { market: string }) {
+  const [ticker, setTicker] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    getTicker(market).then((data) => {
+      if (mounted) {
+        setTicker(data);
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (mounted) setLoading(false);
+    });
+
+    const cbId = `INFO-${market}`;
+    SignalingManager.getInstance().registerCallback(
+      `ticker.${market}`,
+      (data: any) => {
+        if (data.symbol === market && mounted) {
+          setTicker((prev: any) => ({ ...prev, ...data }));
+        }
+      },
+      cbId
+    );
+
+    SignalingManager.getInstance().sendMessage({
+      method: "SUBSCRIBE",
+      params: [`ticker.${market}`],
+    });
+
+    return () => {
+      mounted = false;
+      SignalingManager.getInstance().deRegisterCallback(`ticker.${market}`, cbId);
+      SignalingManager.getInstance().sendMessage({
+        method: "UNSUBSCRIBE",
+        params: [`ticker.${market}`],
+      });
+    };
+  }, [market]);
+
+  if (loading) {
+    return <div className="flex justify-center p-8"><LoadingSpinner /></div>;
+  }
+
+  if (!ticker) {
+    return <div className="text-center text-xs text-bp-text-tertiary">No info available</div>;
+  }
+
+  const isPos = parseFloat(ticker.priceChangePercent || "0") >= 0;
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-sm font-semibold text-bp-text-primary mb-2">Market Statistics (24h)</h2>
+      <div className="grid grid-cols-2 gap-4 text-xs">
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">Price Change</div>
+          <div className={cn("font-medium", isPos ? "text-bp-green" : "text-bp-red")}>
+            {isPos ? "+" : ""}{formatPrice(ticker.priceChange, 2)} ({isPos ? "+" : ""}{formatPercentage(ticker.priceChangePercent, false)})
+          </div>
+        </div>
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">High / Low</div>
+          <div className="text-bp-text-primary font-medium">{formatPrice(ticker.high, 2)} / {formatPrice(ticker.low, 2)}</div>
+        </div>
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">Volume (Base)</div>
+          <div className="text-bp-text-primary font-medium">{formatVolume(ticker.volume)}</div>
+        </div>
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">Volume (Quote)</div>
+          <div className="text-bp-text-primary font-medium">{formatVolume(ticker.quoteVolume)}</div>
+        </div>
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">Last Price</div>
+          <div className="text-bp-text-primary font-medium">{formatPrice(ticker.lastPrice, 2)}</div>
+        </div>
+        <div className="p-3 bg-bp-bg-secondary rounded border border-bp-border">
+          <div className="text-bp-text-tertiary mb-1">Trades</div>
+          <div className="text-bp-text-primary font-medium">{ticker.trades || "-"}</div>
+        </div>
+      </div>
+    </div>
   );
 }

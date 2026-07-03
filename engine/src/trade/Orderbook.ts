@@ -17,6 +17,9 @@ export interface Fill {
     tradeId: number;
     otherUserId: string;
     markerOrderId: string;
+    makerPrice: number;
+    makerQuantity: number;
+    makerSide: "buy" | "sell";
 }
 
 export class Orderbook {
@@ -196,7 +199,10 @@ export class Orderbook {
                     qty: filledQty,
                     tradeId: this.lastTradeId++,
                     otherUserId: this.asks[i].userId,
-                    markerOrderId: this.asks[i].orderId
+                    markerOrderId: this.asks[i].orderId,
+                    makerPrice: this.asks[i].price,
+                    makerQuantity: this.asks[i].quantity,
+                    makerSide: "sell",
                 });
             }
         }
@@ -232,7 +238,10 @@ export class Orderbook {
                     qty: amountRemaining,
                     tradeId: this.lastTradeId++,
                     otherUserId: this.bids[i].userId,
-                    markerOrderId: this.bids[i].orderId
+                    markerOrderId: this.bids[i].orderId,
+                    makerPrice: this.bids[i].price,
+                    makerQuantity: this.bids[i].quantity,
+                    makerSide: "buy",
                 });
             }
         }

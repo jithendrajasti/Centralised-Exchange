@@ -2,10 +2,18 @@ import { Router } from "express";
 import { RedisManager } from "../RedisManager";
 import { GET_TICKERS } from "../types";
 import { parseMarketSymbol } from "../utils/validation";
+import { createRateLimiter } from "../middleware/rateLimit";
 
 export const tickersRouter = Router();
 
-tickersRouter.get("/", async (req, res) => {
+const publicReadLimiter = createRateLimiter({
+    keyPrefix: "rl:ticker:read",
+    max: 600,
+    windowSeconds: 60,
+    keyGenerator: (req) => req.ip || "unknown",
+});
+
+tickersRouter.get("/", publicReadLimiter, async (req, res) => {
     try {
         const { symbol } = req.query;
         let market: string | undefined;

@@ -6,7 +6,7 @@ function testAPI() {
     const options = {
         hostname: 'localhost',
         port: 3000,
-        path: '/api/v1/klines?market=TATA_INR&interval=1m&startTime=1760286250&endTime=1760891050',
+        path: '/api/v1/klines?market=SOL_USDC&interval=1m&startTime=1760286250&endTime=1760891050',
         method: 'GET'
     };
     

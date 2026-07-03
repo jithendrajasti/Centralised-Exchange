@@ -1,8 +1,16 @@
 import { Router } from "express";
 import { pool } from "../db/pool";
 import { parseMarketSymbol } from "../utils/validation";
+import { createRateLimiter } from "../middleware/rateLimit";
 
 export const klineRouter = Router();
+
+const publicReadLimiter = createRateLimiter({
+    keyPrefix: "rl:klines:read",
+    max: 600,
+    windowSeconds: 60,
+    keyGenerator: (req) => req.ip || "unknown",
+});
 
 const INTERVAL_MAP: Record<string, string> = {
     '1m':  'klines_1m',
@@ -14,7 +22,7 @@ const INTERVAL_MAP: Record<string, string> = {
     '1w':  'klines_1w',
 };
 
-klineRouter.get("/", async (req, res) => {
+klineRouter.get("/", publicReadLimiter, async (req, res) => {
     const market = (req.query.market || req.query.symbol) as string;
     const { interval, startTime, endTime } = req.query;
 

@@ -16,15 +16,15 @@ async function seedChartData() {
         console.log('✅ Connected to PostgreSQL');
         
         // Clear existing data
-        await client.query('DELETE FROM tata_prices');
+        await client.query('DELETE FROM sol_usdc_prices');
         console.log('🗑️ Cleared existing data');
         
         // Generate data for the last 7 days
         const now = new Date();
         const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
         
-        const markets = ['TATA_INR', 'SOL_USDC', 'BTC_USDC', 'ETH_USDC'];
-        const basePrices = { 'TATA_INR': 850, 'SOL_USDC': 100, 'BTC_USDC': 50000, 'ETH_USDC': 3000 };
+        const markets = ['SOL_USDC', 'BTC_USDC', 'ETH_USDC'];
+        const basePrices = { 'SOL_USDC': 100, 'BTC_USDC': 50000, 'ETH_USDC': 3000 };
         
         for (const market of markets) {
             console.log(`📊 Generating data for ${market}...`);
@@ -71,12 +71,12 @@ async function seedChartData() {
             const batchSize = 1000;
             for (let i = 0; i < trades.length; i += batchSize) {
                 const batch = trades.slice(i, i + batchSize);
-                const values = batch.map(trade => 
-                    `('${trade.time.toISOString()}', ${trade.price}, ${trade.volume}, '${trade.currency_code}')`
+                const values = batch.map((trade, idx) => 
+                    `('${trade.time.toISOString()}', 'chart-sample-${currentTime.getTime()}-${i}-${idx}', ${trade.price}, ${trade.volume}, '${trade.currency_code}')`
                 ).join(',');
                 
                 await client.query(`
-                    INSERT INTO tata_prices (time, price, volume, currency_code) 
+                    INSERT INTO sol_usdc_prices (time, trade_id, price, volume, currency_code) 
                     VALUES ${values}
                 `);
             }
@@ -97,7 +97,7 @@ async function seedChartData() {
         // Check results
         const klines1m = await client.query('SELECT COUNT(*) FROM klines_1m');
         const klines1h = await client.query('SELECT COUNT(*) FROM klines_1h');
-        const totalTrades = await client.query('SELECT COUNT(*) FROM tata_prices');
+        const totalTrades = await client.query('SELECT COUNT(*) FROM sol_usdc_prices');
         
         console.log('📊 Results:');
         console.log(`   Total trades: ${totalTrades.rows[0].count}`);

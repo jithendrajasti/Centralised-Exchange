@@ -26,7 +26,7 @@ async function create5mKlines() {
                 last(price, time) AS close,
                 sum(volume) AS volume,
                 currency_code
-            FROM tata_prices
+            FROM sol_usdc_prices
             GROUP BY bucket, currency_code;
         `);
         

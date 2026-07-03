@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getTicker, createOrder, getBalances } from "../utils/httpClient";
+import { getTicker, createOrder, getBalances, getDepth } from "../utils/httpClient";
 import { QUANTITY_PRECISION } from "../lib/constants";
 import { cn } from "../lib/utils";
 import { PercentageSlider } from "./PercentageSlider";
+import { useAuthStore } from "../store/useAuthStore";
 import toast from "react-hot-toast";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -30,6 +31,7 @@ export function SwapUI({ market }: { market: string }) {
   const [sliderPercent, setSliderPercent] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [balances, setBalances] = useState<Record<string, { available: number; locked: number }>>({});
+  const { isAuthenticated, openModal } = useAuthStore();
 
   const [base = "", quote = ""] = market.split("_");
   const baseBalance = balances[base]?.available ?? 0;
@@ -47,14 +49,52 @@ export function SwapUI({ market }: { market: string }) {
 
   useEffect(() => {
     getTicker(market).then((t) => setPrice(t.lastPrice));
-    refreshBalances();
-  }, [market]);
+    if (isAuthenticated) {
+      refreshBalances();
+    }
+  }, [market, isAuthenticated]);
 
   /* ─── Computed values ─── */
   const total =
     price && quantity
       ? (parseFloat(price) * parseFloat(quantity)).toFixed(2)
       : "0.00";
+
+  /* ─── Reset slider on side change ─── */
+  useEffect(() => {
+    setSliderPercent(0);
+    setQuantity("");
+  }, [side]);
+
+  /* ─── Handle Quick Fills ─── */
+  const handleQuickFill = async (type: "mid" | "bbo") => {
+    try {
+      const d = await getDepth(market);
+      const topBid = d.bids?.[0]?.[0] ? parseFloat(d.bids[0][0]) : null;
+      const topAsk = d.asks?.[0]?.[0] ? parseFloat(d.asks[0][0]) : null;
+      
+      if (!topBid && !topAsk) {
+        toast.error("No depth available");
+        return;
+      }
+      
+      if (type === "mid") {
+        if (topBid && topAsk) {
+          setPrice(((topBid + topAsk) / 2).toFixed(2));
+        } else if (topBid || topAsk) {
+          setPrice((topBid || topAsk)!.toFixed(2));
+        }
+      } else if (type === "bbo") {
+        if (side === "buy") {
+          setPrice((topAsk || topBid)!.toFixed(2));
+        } else {
+          setPrice((topBid || topAsk)!.toFixed(2));
+        }
+      }
+    } catch (e) {
+      toast.error("Failed to fetch depth");
+    }
+  };
 
   /* ─── Handle percentage slider ─── */
   const handleSliderChange = (percent: number) => {
@@ -83,28 +123,43 @@ export function SwapUI({ market }: { market: string }) {
 
   /* ─── Submit Order ─── */
   const handleSubmit = async () => {
-    if (!price || !quantity) {
-      toast.error("Please enter price and quantity");
-      return;
+    let submitPrice = price;
+
+    if (orderType === "market") {
+      try {
+        const d = await getDepth(market);
+        const topBid = d.bids?.[0]?.[0];
+        const topAsk = d.asks?.[0]?.[0];
+        // For market buy, we cross the spread up to a high limit.
+        // For market sell, we cross the spread down to 0.
+        submitPrice = side === "buy" ? (topAsk ? (parseFloat(topAsk) * 1.05).toFixed(2) : "99999999") : (topBid ? (parseFloat(topBid) * 0.95).toFixed(2) : "0");
+      } catch {
+        submitPrice = side === "buy" ? "99999999" : "0";
+      }
+    } else {
+      if (!price || parseFloat(price) <= 0) {
+        toast.error("Please enter a valid price");
+        return;
+      }
     }
 
-    if (parseFloat(price) <= 0 || parseFloat(quantity) <= 0) {
-      toast.error("Price and quantity must be positive");
+    if (!quantity || parseFloat(quantity) <= 0) {
+      toast.error("Please enter a valid quantity");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const result = await createOrder(market, price, quantity, side);
+      const result = await createOrder(market, submitPrice, quantity, side);
       toast.success(`Order placed! ID: ${result.orderId.slice(0, 8)}...`);
       setQuantity("");
       setSliderPercent(0);
       await refreshBalances();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Order error:", error);
       toast.error(
-        error instanceof Error ? error.message : "Failed to place order"
+        error.response?.data?.message || (error instanceof Error ? error.message : "Failed to place order")
       );
     } finally {
       setIsSubmitting(false);
@@ -162,7 +217,7 @@ export function SwapUI({ market }: { market: string }) {
         </div>
 
         {/* ═══ 3. Price Input (Limit only) ═══ */}
-        {orderType === "limit" && (
+        {orderType === "limit" ? (
           <InputField
             label="Price"
             value={price}
@@ -170,11 +225,16 @@ export function SwapUI({ market }: { market: string }) {
             suffix={quote}
             actions={
               <div className="flex gap-1.5">
-                <QuickFillButton label="Mid" onClick={() => {}} />
-                <QuickFillButton label="BBO" onClick={() => {}} />
+                <QuickFillButton label="Mid" onClick={() => handleQuickFill("mid")} />
+                <QuickFillButton label="BBO" onClick={() => handleQuickFill("bbo")} />
               </div>
             }
           />
+        ) : (
+          <div className="flex items-center justify-between bg-bp-bg-input border border-bp-border rounded px-3 py-2 text-xs">
+            <span className="text-bp-text-tertiary">Price</span>
+            <span className="text-bp-text-primary">Market Price</span>
+          </div>
         )}
 
         {/* ═══ 4. Size Input ═══ */}
@@ -194,50 +254,55 @@ export function SwapUI({ market }: { market: string }) {
         />
 
         {/* ═══ 6. Order Value ═══ */}
-        <div className="space-y-1.5">
-          <InfoRow label="Order Value" value={`${total} ${quote}`} />
+        <div className="space-y-1.5 pb-2">
+          {orderType === "limit" && <InfoRow label="Order Value" value={`${total} ${quote}`} />}
           <InfoRow label={`${base} Balance`} value={`${baseBalance.toFixed(QUANTITY_PRECISION)} ${base}`} />
           <InfoRow label={`${quote} Balance`} value={`${quoteBalance.toFixed(2)} ${quote}`} />
         </div>
 
-        {/* ═══ 7. Advanced Options ═══ */}
-        <div className="flex items-center gap-4 pt-1">
-          <Checkbox label="Post Only" />
-          <Checkbox label="IOC" />
-        </div>
-
         {/* ═══ 8. Submit Button ═══ */}
-        <button
-          onClick={handleSubmit}
-          disabled={isSubmitting}
-          className={cn(
-            "w-full py-2.5 rounded-md font-semibold text-xs transition-all",
-            isSubmitting && "opacity-50 cursor-not-allowed",
-            isBuy
-              ? "bg-bp-green hover:bg-bp-green-hover text-white"
-              : "bg-bp-red hover:bg-bp-red-hover text-white"
-          )}
-        >
-          {isSubmitting
-            ? "Placing Order..."
-            : `${isBuy ? "Buy" : "Sell"} ${base}`}
-        </button>
+        {isAuthenticated ? (
+          <button
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+            className={cn(
+              "w-full py-2.5 rounded-md font-semibold text-xs transition-all",
+              isSubmitting && "opacity-50 cursor-not-allowed",
+              isBuy
+                ? "bg-bp-green hover:bg-bp-green-hover text-white"
+                : "bg-bp-red hover:bg-bp-red-hover text-white"
+            )}
+          >
+            {isSubmitting
+              ? "Placing Order..."
+              : `${isBuy ? "Buy" : "Sell"} ${base}`}
+          </button>
+        ) : (
+          <button
+            onClick={openModal}
+            className="w-full py-2.5 bg-bp-bg-tertiary hover:bg-bp-border text-bp-text-secondary rounded-md font-semibold text-xs transition-colors"
+          >
+            Log in or Sign up to Trade
+          </button>
+        )}
 
         {/* ═══ 9. Auth CTAs ═══ */}
-        <div className="text-center space-y-1 pt-1">
-          <p className="text-2xs text-bp-text-tertiary">
-            New to Backpack?{" "}
-            <button className="text-bp-text-primary hover:underline font-medium">
-              Sign up
-            </button>
-          </p>
-          <p className="text-2xs text-bp-text-tertiary">
-            Already have an account?{" "}
-            <button className="text-bp-text-primary hover:underline font-medium">
-              Log in
-            </button>
-          </p>
-        </div>
+        {!isAuthenticated && (
+          <div className="text-center space-y-1 pt-1">
+            <p className="text-2xs text-bp-text-tertiary">
+              New to CEX?{" "}
+              <button onClick={openModal} className="text-bp-text-primary hover:underline font-medium">
+                Sign up
+              </button>
+            </p>
+            <p className="text-2xs text-bp-text-tertiary">
+              Already have an account?{" "}
+              <button onClick={openModal} className="text-bp-text-primary hover:underline font-medium">
+                Log in
+              </button>
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

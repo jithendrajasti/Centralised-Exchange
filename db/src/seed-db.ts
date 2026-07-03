@@ -105,18 +105,35 @@ async function initializeDB() {
     // Seed test user: trader@cex.io / Test1234!
     // Engine assigns this user id "9" in snapshot.json for wallet balances
     const testUserId = "00000000-0000-0000-0000-000000000009";
-    await client.query(`
-        INSERT INTO users (id, email, password_hash, email_verified, status)
-        VALUES ($1, $2, $3, true, 'active')
-        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, email_verified = true;
-    `, [testUserId, "trader@cex.io", TEST_USER_PASSWORD_HASH]);
+    
+    // Seed virtual traders (UUIDs match engine & mm)
+    const mmUser = "00000000-0000-0000-0000-000000000005";
+    const momUser = "00000000-0000-0000-0000-000000000006";
+    const revUser = "00000000-0000-0000-0000-000000000007";
+    const scalpUser = "00000000-0000-0000-0000-000000000008";
 
-    // Assign 'user' role to test user
-    await client.query(`
-        INSERT INTO user_roles (user_id, role_id)
-        SELECT $1, id FROM roles WHERE name = 'user'
-        ON CONFLICT DO NOTHING;
-    `, [testUserId]);
+    const usersToInsert = [
+        [testUserId, "trader@cex.io"],
+        [mmUser, "mm@cex.io"],
+        [momUser, "momentum@cex.io"],
+        [revUser, "reverter@cex.io"],
+        [scalpUser, "scalper@cex.io"],
+    ];
+
+    for (const [id, email] of usersToInsert) {
+        await client.query(`
+            INSERT INTO users (id, email, password_hash, email_verified, status)
+            VALUES ($1, $2, $3, true, 'active')
+            ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, email_verified = true;
+        `, [id, email, TEST_USER_PASSWORD_HASH]);
+        
+        // Assign 'user' role
+        await client.query(`
+            INSERT INTO user_roles (user_id, role_id)
+            SELECT $1, id FROM roles WHERE name = 'user'
+            ON CONFLICT DO NOTHING;
+        `, [id]);
+    }
 
     console.log("✅ Test user created: trader@cex.io / Test1234!");
     console.log(`   UUID: ${testUserId} (Engine user ID: 9)`);
@@ -126,12 +143,14 @@ async function initializeDB() {
         DROP TABLE IF EXISTS "sol_usdc_prices" CASCADE;
         CREATE TABLE "sol_usdc_prices"(
             time            TIMESTAMP WITH TIME ZONE NOT NULL,
+            trade_id        TEXT NOT NULL,
             price           DOUBLE PRECISION,
             volume          DOUBLE PRECISION,
             currency_code   VARCHAR (10),
-            is_buyer_maker  BOOLEAN NOT NULL DEFAULT false
+            is_buyer_maker  BOOLEAN NOT NULL DEFAULT false,
+            PRIMARY KEY (time, trade_id)
         );
-        SELECT create_hypertable('sol_usdc_prices', 'time', 'price', 2);
+        SELECT create_hypertable('sol_usdc_prices', 'time');
     `);
     console.log("Created sol_usdc_prices hypertable");
 
@@ -140,6 +159,7 @@ async function initializeDB() {
         DROP TABLE IF EXISTS "orders" CASCADE;
         CREATE TABLE "orders"(
             order_id        VARCHAR(50) PRIMARY KEY,
+            user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             market          VARCHAR(20) NOT NULL,
             price           VARCHAR(20) NOT NULL,
             quantity        VARCHAR(20) NOT NULL,
@@ -149,6 +169,7 @@ async function initializeDB() {
             updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         CREATE INDEX idx_orders_market ON orders(market);
+        CREATE INDEX idx_orders_user ON orders(user_id);
         CREATE INDEX idx_orders_created_at ON orders(created_at);
     `);
     console.log("Created orders table");
@@ -171,8 +192,92 @@ async function initializeDB() {
         console.log(`Created ${name} materialized view`);
     }
 
+    // Seed 30 days of historical SOL/USDC price data for charts
+    await seedHistoricalPrices();
+
     await client.end();
     console.log("Database initialized successfully");
+}
+
+/**
+ * Generates 30 days of synthetic SOL/USDC 1-minute trade data.
+ * Uses a bounded random walk to simulate realistic price movement.
+ */
+async function seedHistoricalPrices() {
+    console.log("Seeding 30 days of historical SOL/USDC price data...");
+
+    const now = Date.now();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const startMs = now - thirtyDaysMs;
+    const intervalMs = 60 * 1000; // 1 minute candle = multiple trades
+
+    // Start price around $130, end near $150 with realistic walk
+    let price = 130.0;
+    const tradesPerCandle = 3; // ~3 trades per minute
+    const BATCH_SIZE = 1000;
+    const buffer: any[][] = [];
+
+    let tradeId = 1;
+
+    for (let t = startMs; t < now; t += intervalMs) {
+        for (let i = 0; i < tradesPerCandle; i++) {
+            // Bounded random walk: drift slightly upward, ±0.3% per step
+            const drift = 0.00005; // slight upward trend
+            const volatility = 0.003;
+            const change = drift + (Math.random() - 0.5) * volatility;
+            price = Math.max(80, Math.min(300, price * (1 + change)));
+
+            const tradeTime = new Date(t + i * (intervalMs / tradesPerCandle));
+            const volume = 0.01 + Math.random() * 5; // 0.01 to 5 SOL
+            const isBuyerMaker = Math.random() > 0.5;
+
+            buffer.push([
+                tradeTime.toISOString(),
+                `seed-${tradeId++}`,
+                price.toFixed(6),
+                volume.toFixed(6),
+                "SOL_USDC",
+                isBuyerMaker,
+            ]);
+
+            if (buffer.length >= BATCH_SIZE) {
+                await insertPriceBatch(buffer);
+                buffer.length = 0;
+            }
+        }
+    }
+
+    // Insert remaining rows
+    if (buffer.length > 0) {
+        await insertPriceBatch(buffer);
+    }
+
+    console.log(`✅ Seeded ${tradeId - 1} historical trades (30 days @ 3 trades/min)`);
+
+    // Refresh all materialized views now that data is present
+    const KLINE_VIEWS = ["klines_1m", "klines_5m", "klines_15m", "klines_1h", "klines_4h", "klines_1d", "klines_1w"];
+    for (const view of KLINE_VIEWS) {
+        await client.query(`REFRESH MATERIALIZED VIEW ${view};`);
+        console.log(`Refreshed ${view}`);
+    }
+}
+
+async function insertPriceBatch(rows: any[][]) {
+    if (rows.length === 0) return;
+
+    const values: any[] = [];
+    const placeholders = rows.map((row, i) => {
+        const base = i * 6;
+        values.push(...row);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+    }).join(", ");
+
+    await client.query(
+        `INSERT INTO sol_usdc_prices (time, trade_id, price, volume, currency_code, is_buyer_maker)
+         VALUES ${placeholders}
+         ON CONFLICT (time, trade_id) DO NOTHING`,
+        values
+    );
 }
 
 initializeDB().catch(console.error);

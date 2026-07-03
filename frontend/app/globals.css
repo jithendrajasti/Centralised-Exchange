@@ -56,7 +56,40 @@
   --text-inverse:   #0B0E11;
 }
 
-/* ─── Base HTML ─── */
+/* ─── Light Theme ─── */
+[data-theme="light"] {
+  --bg-primary:    #FFFFFF;
+  --bg-secondary:  #F5F5F5;
+  --bg-tertiary:   #EBEBEB;
+  --bg-card:       #FAFAFA;
+  --bg-hover:      #E8E8E8;
+  --bg-active:     #DCDCDC;
+  --bg-input:      #F0F0F0;
+  --border:        #E0E0E0;
+  --border-light:  #CCCCCC;
+  --border-active: #AAAAAA;
+  --green:         #0BB572;
+  --green-hover:   #0ECB81;
+  --green-bg:      rgba(14, 203, 129, 0.08);
+  --green-bg-strong: rgba(14, 203, 129, 0.16);
+  --red:           #E8384F;
+  --red-hover:     #F6465D;
+  --red-bg:        rgba(232, 56, 79, 0.08);
+  --red-bg-strong: rgba(232, 56, 79, 0.16);
+  --blue:          #2962FF;
+  --blue-hover:    #3F73FF;
+  --blue-bg:       rgba(41, 98, 255, 0.08);
+  --purple:        #7B61FF;
+  --yellow:        #F0B90B;
+  --orange:        #F0B90B;
+  --text-primary:   #1A1A1A;
+  --text-secondary: #5E6673;
+  --text-tertiary:  #848E9C;
+  --text-disabled:  #AAAAAA;
+  --text-inverse:   #FFFFFF;
+}
+
+
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;

@@ -27,6 +27,7 @@ interface UserBalance {
 export class Engine {
     private orderbooks: Orderbook[] = [];
     private balances: Map<string, UserBalance> = new Map();
+    private lastProcessedStreamId: string = "0-0";
 
     constructor() {
         let snapshot = null
@@ -54,7 +55,7 @@ export class Engine {
             });
 
             this.orderbooks = (snapshotSnapshot.orderbooks || []).map((o: any) => new Orderbook(
-                o.baseAsset, 
+                o.baseAsset,
                 (o.bids || []).map(normalizeOrder),
                 (o.asks || []).map(normalizeOrder),
                 o.lastTradeId || 0,
@@ -86,35 +87,64 @@ export class Engine {
             } else {
                 this.setBaseBalances();
             }
+
+            // Load last processed stream ID for crash recovery replay
+            if (snapshotSnapshot.lastProcessedStreamId) {
+                this.lastProcessedStreamId = snapshotSnapshot.lastProcessedStreamId;
+            }
         } else {
             this.orderbooks = [new Orderbook(`SOL`, [], [], 0, 0)];
             this.setBaseBalances();
         }
-        // Snapshot every 30s (was 3s) — only if data changed
+        // Snapshot every 30s — only if data changed.
+        // _dirty is cleared BEFORE saveSnapshot() so any trades arriving
+        // during the async disk write will set _dirty=true again and be
+        // captured in the next interval. This prevents silent data gaps.
         this._dirty = false;
         setInterval(() => {
             if (this._dirty) {
+                this._dirty = false; // Clear first — new trades during write re-set this
                 this.saveSnapshot();
-                this._dirty = false;
             }
         }, 1000 * 30);
     }
 
     private _dirty: boolean = false;
 
+    /** Called by index.ts after each successful XACK so the snapshot records the offset. */
+    public setLastProcessedStreamId(id: string) {
+        this.lastProcessedStreamId = id;
+    }
+
+    /** Exposed so index.ts can start XREADGROUP from the correct offset after a crash. */
+    public getLastProcessedStreamId(): string {
+        return this.lastProcessedStreamId;
+    }
+
     saveSnapshot() {
         const snapshotData = {
             version: SNAPSHOT_VERSION,
+            lastProcessedStreamId: this.lastProcessedStreamId,
             orderbooks: this.orderbooks.map(o => o.getSnapshot()),
             balances: Array.from(this.balances.entries())
         };
-        // Async write — don't block the event loop
-        fs.writeFile("./snapshot.json", JSON.stringify(snapshotData), (err) => {
-            if (err) console.error("Snapshot write error:", err);
+        const tmpFile = "./snapshot.tmp.json";
+        fs.writeFile(tmpFile, JSON.stringify(snapshotData), (err) => {
+            if (err) {
+                console.error("Snapshot write error:", err);
+                this._dirty = true; // Mark dirty again so next interval retries
+                return;
+            }
+            fs.rename(tmpFile, "./snapshot.json", (renameErr) => {
+                if (renameErr) {
+                    console.error("Snapshot rename error:", renameErr);
+                    this._dirty = true; // Mark dirty again so next interval retries
+                }
+            });
         });
     }
 
-    process({ message, clientId }: {message: MessageFromApi, clientId: string}) {
+    process({ message, clientId }: { message: MessageFromApi, clientId: string }) {
         switch (message.type) {
             case CREATE_ORDER:
                 try {
@@ -127,14 +157,12 @@ export class Engine {
                             fills
                         }
                     });
-                } catch (e) {
+                } catch (e: any) {
                     console.log(e);
                     RedisManager.getInstance().sendToApi(clientId, {
-                        type: "ORDER_CANCELLED",
+                        type: "ORDER_REJECTED",
                         payload: {
-                            orderId: "",
-                            executedQty: 0,
-                            remainingQty: 0
+                            reason: e.message || "Failed to create order"
                         }
                     });
                 }
@@ -147,7 +175,7 @@ export class Engine {
                     const cancelOrderbook = this.orderbooks.find(o => o.ticker() === cancelMarket);
                     const baseAsset = cancelMarket.split("_")[0];
                     const quoteAsset = cancelMarket.split("_")[1];
-                    
+
                     if (!cancelOrderbook) {
                         throw new Error("No orderbook found");
                     }
@@ -192,25 +220,25 @@ export class Engine {
                     if (order.side === "buy") {
                         // Cancel the order from orderbook first
                         const price = cancelOrderbook.cancelBid(order);
-                        
+
                         // Calculate locked funds to unlock based on remaining quantity
                         const lockedAmount = multiplyScaled(remainingQty, order.price);
-                        
+
                         // Unlock quote currency (INR for buy orders)
                         userBalance[quoteAsset].available += lockedAmount;
                         userBalance[quoteAsset].locked -= lockedAmount;
-                        
+
                         if (price) {
                             this.sendUpdatedDepthAt(fromScaledToDecimal(price), cancelMarket);
                         }
                     } else {
                         // Cancel the order from orderbook first
                         const price = cancelOrderbook.cancelAsk(order);
-                        
-                        // Unlock base asset (TATA for sell orders) based on remaining quantity
+
+                        // Unlock base asset (SOL for sell orders) based on remaining quantity
                         userBalance[baseAsset].available += remainingQty;
                         userBalance[baseAsset].locked -= remainingQty;
-                        
+
                         if (price) {
                             this.sendUpdatedDepthAt(fromScaledToDecimal(price), cancelMarket);
                         }
@@ -218,7 +246,7 @@ export class Engine {
 
                     // Send real-time depth update after order cancellation
                     this.publishWsDepthUpdate(cancelMarket);
-                    
+
                     RedisManager.getInstance().sendToApi(clientId, {
                         type: "ORDER_CANCELLED",
                         payload: {
@@ -227,10 +255,15 @@ export class Engine {
                             remainingQty: scaledToNumber(remainingQty)
                         }
                     });
-                    
-                } catch (e) {
-                    console.log("Error while cancelling order:");
-                    console.log(e);
+
+                } catch (e: any) {
+                    console.log("Error while cancelling order:", e?.message || e);
+                    RedisManager.getInstance().sendToApi(clientId, {
+                        type: "CANCEL_ORDER_REJECTED",
+                        payload: {
+                            error: e?.message || "Failed to cancel order"
+                        }
+                    });
                 }
                 break;
             case GET_OPEN_ORDERS:
@@ -252,8 +285,8 @@ export class Engine {
                     RedisManager.getInstance().sendToApi(clientId, {
                         type: "OPEN_ORDERS",
                         payload: openOrders
-                    }); 
-                } catch(e) {
+                    });
+                } catch (e) {
                     console.log(e);
                 }
                 break;
@@ -262,7 +295,7 @@ export class Engine {
                     const userId = message.data.userId;
                     const amount = message.data.amount;
                     this.onRamp(userId, amount);
-                    
+
                     RedisManager.getInstance().sendToApi(clientId, {
                         type: "ON_RAMP_SUCCESS",
                         payload: {
@@ -273,10 +306,10 @@ export class Engine {
                 } catch (e) {
                     console.log("On-ramp error:", e);
                     RedisManager.getInstance().sendToApi(clientId, {
-                        type: "ON_RAMP_SUCCESS",
+                        type: "ON_RAMP_FAILURE",
                         payload: {
                             userId: message.data.userId,
-                            amount: Number(message.data.amount)
+                            error: (e as Error)?.message || "Unknown on-ramp error"
                         }
                     });
                 }
@@ -328,7 +361,7 @@ export class Engine {
             case GET_TICKERS:
                 try {
                     const market = message.data.market;
-                    
+
                     if (market) {
                         // Get single ticker for specific market
                         const orderbook = this.orderbooks.find(o => o.ticker() === market);
@@ -393,6 +426,18 @@ export class Engine {
         if (!Number.isFinite(numQuantity) || numQuantity <= 0) throw new Error("Invalid quantity");
         if (side !== "buy" && side !== "sell") throw new Error("Invalid side");
 
+        // Sanity bounds: prevent absurd prices and quantities per market
+        // These are scaled integers: 1 unit = 0.000001 (6 decimal places)
+        const MIN_PRICE = toScaledFromDecimal("0.01");       // $0.01 minimum
+        const MAX_PRICE = toScaledFromDecimal("1000000");    // $1,000,000 maximum
+        const MIN_QUANTITY = toScaledFromDecimal("0.000001"); // 0.000001 minimum
+        const MAX_QUANTITY = toScaledFromDecimal("100000");   // 100,000 maximum per order
+
+        if (numPrice < MIN_PRICE) throw new Error(`Price too low (minimum $0.01)`);
+        if (numPrice > MAX_PRICE) throw new Error(`Price too high (maximum $1,000,000)`);
+        if (numQuantity < MIN_QUANTITY) throw new Error(`Quantity too small (minimum 0.000001)`);
+        if (numQuantity > MAX_QUANTITY) throw new Error(`Quantity too large (maximum 100,000 per order)`);
+
         this.checkAndLockFunds(baseAsset, quoteAsset, side, userId, price, quantity);
 
         const order: Order = {
@@ -404,7 +449,7 @@ export class Engine {
             userId,
             timestamp: Date.now()
         };
-        
+
         const { fills, executedQty } = orderbook.addOrder(order);
         this.updateBalance(userId, baseAsset, quoteAsset, side, fills, executedQty);
 
@@ -416,7 +461,7 @@ export class Engine {
 
         // Mark dirty for snapshot
         this._dirty = true;
-        
+
         const apiFills = fills.map((fill) => ({
             price: fromScaledToDecimal(fill.price),
             qty: scaledToNumber(fill.qty),
@@ -436,6 +481,7 @@ export class Engine {
                 price: fromScaledToDecimal(order.price),
                 quantity: fromScaledToDecimal(order.quantity),
                 side: order.side,
+                userId: order.userId
             }
         });
 
@@ -444,7 +490,12 @@ export class Engine {
                 type: ORDER_UPDATE,
                 data: {
                     orderId: fill.markerOrderId,
-                    executedQty: scaledToNumber(fill.qty)
+                    executedQty: scaledToNumber(fill.qty),
+                    userId: fill.otherUserId,
+                    market: market,
+                    price: fromScaledToDecimal(fill.makerPrice),
+                    quantity: fromScaledToDecimal(fill.makerQuantity),
+                    side: fill.makerSide,
                 }
             });
         });
@@ -498,7 +549,7 @@ export class Engine {
         const depth = orderbook.getDepth();
         const updatedBids = depth?.bids.filter(x => x[0] === price);
         const updatedAsks = depth?.asks.filter(x => x[0] === price);
-        
+
         RedisManager.getInstance().publishMessage(`depth.${market}`, {
             stream: `depth.${market}`,
             data: {
@@ -529,17 +580,17 @@ export class Engine {
             });
         }
         if (side === "sell") {
-           const fillPrices = new Set(fills.map((fill) => fromScaledToDecimal(fill.price)));
-           const updatedBids = depth?.bids.filter(x => fillPrices.has(x[0]));
-           const updatedAsk = depth?.asks.find(x => x[0] === price);
-           RedisManager.getInstance().publishMessage(`depth.${market}`, {
-               stream: `depth.${market}`,
-               data: {
-                   a: updatedAsk ? [updatedAsk] : [],
-                   b: updatedBids,
-                   e: "depth"
-               }
-           });
+            const fillPrices = new Set(fills.map((fill) => fromScaledToDecimal(fill.price)));
+            const updatedBids = depth?.bids.filter(x => fillPrices.has(x[0]));
+            const updatedAsk = depth?.asks.find(x => x[0] === price);
+            RedisManager.getInstance().publishMessage(`depth.${market}`, {
+                stream: `depth.${market}`,
+                data: {
+                    a: updatedAsk ? [updatedAsk] : [],
+                    b: updatedBids,
+                    e: "depth"
+                }
+            });
         }
     }
 
@@ -621,8 +672,8 @@ export class Engine {
     }
 
     setBaseBalances() {
-        // Test user: trader@cex.io — huge balance for testing
-        this.balances.set("9", {
+        // Test user: trader@cex.io — maps to UUID 00000000-0000-0000-0000-000000000009
+        this.balances.set("00000000-0000-0000-0000-000000000009", {
             [BASE_CURRENCY]: {
                 available: scaleFromNumber(1000000),   // 1M USDC
                 locked: 0
@@ -633,31 +684,8 @@ export class Engine {
             }
         });
 
-        // Legacy frontend test users
-        this.balances.set("1", {
-            [BASE_CURRENCY]: {
-                available: scaleFromNumber(10000000),
-                locked: 0
-            },
-            "SOL": {
-                available: scaleFromNumber(10000000),
-                locked: 0
-            }
-        });
-
-        this.balances.set("2", {
-            [BASE_CURRENCY]: {
-                available: scaleFromNumber(10000000),
-                locked: 0
-            },
-            "SOL": {
-                available: scaleFromNumber(10000000),
-                locked: 0
-            }
-        });
-
         // Market Maker virtual traders
-        this.balances.set("5", {
+        this.balances.set("00000000-0000-0000-0000-000000000005", {
             [BASE_CURRENCY]: {
                 available: scaleFromNumber(50000000),
                 locked: 0
@@ -668,7 +696,7 @@ export class Engine {
             }
         });
 
-        this.balances.set("6", {
+        this.balances.set("00000000-0000-0000-0000-000000000006", {
             [BASE_CURRENCY]: {
                 available: scaleFromNumber(50000000),
                 locked: 0
@@ -679,7 +707,7 @@ export class Engine {
             }
         });
 
-        this.balances.set("7", {
+        this.balances.set("00000000-0000-0000-0000-000000000007", {
             [BASE_CURRENCY]: {
                 available: scaleFromNumber(50000000),
                 locked: 0
@@ -690,7 +718,7 @@ export class Engine {
             }
         });
 
-        this.balances.set("8", {
+        this.balances.set("00000000-0000-0000-0000-000000000008", {
             [BASE_CURRENCY]: {
                 available: scaleFromNumber(50000000),
                 locked: 0
@@ -702,7 +730,7 @@ export class Engine {
         });
     }
 
-        updateTicker(market: string, fills: Fill[]) {
+    updateTicker(market: string, fills: Fill[]) {
         const orderbook = this.orderbooks.find(o => o.ticker() === market);
         if (!orderbook) {
             return;
@@ -783,7 +811,7 @@ export class Engine {
         if (!orderbook) {
             return;
         }
-        
+
         const depth = orderbook.getDepth();
         RedisManager.getInstance().publishMessage(`depth.${market}`, {
             stream: `depth.${market}`,

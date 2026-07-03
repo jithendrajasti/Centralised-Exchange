@@ -3,7 +3,7 @@ import { Orderbook } from "../trade/Orderbook";
 
 describe("Simple orders", () => {
     it("Empty orderbook should not be filled", () => {
-        const orderbook = new Orderbook("TATA", [], [], 0, 0);
+        const orderbook = new Orderbook("SOL", [], [], 0, 0);
         const order = {
             price: 1000,
             quantity: 1,
@@ -19,7 +19,7 @@ describe("Simple orders", () => {
     });
 
     it("Can be partially filled", () => {
-        const orderbook = new Orderbook("TATA", [{
+        const orderbook = new Orderbook("SOL", [{
             price: 1000,
             quantity: 1,
             orderId: "1",
@@ -45,7 +45,7 @@ describe("Simple orders", () => {
     });
 
     it("Can be partially filled", () => {
-        const orderbook = new Orderbook("TATA", [{
+        const orderbook = new Orderbook("SOL", [{
             price: 999,
             quantity: 1,
             orderId: "1",
@@ -84,7 +84,7 @@ describe("Simple orders", () => {
 
 describe("Self trade prevention", () => {
     it("User cannot self trade", () => {
-        const orderbook = new Orderbook("TATA", [], [{
+        const orderbook = new Orderbook("SOL", [], [{
             price: 1000,
             quantity: 1,
             orderId: "1",
@@ -114,7 +114,7 @@ describe("Self trade prevention", () => {
 
 describe("Precision errors are taken care of", () => {
     it("Bid does not persist even with decimals", () => {
-        const orderbook = new Orderbook("TATA", [{
+        const orderbook = new Orderbook("SOL", [{
             price: 999,
             quantity: 0.551123,
             orderId: "1",

@@ -75,10 +75,18 @@ function checkConnectionLimit(ip: string) {
 
 const wss = new WebSocketServer({ port: WS_PORT });
 
+wss.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+        console.error(`❌ Port ${WS_PORT} is already in use. Is another WS instance running?`);
+        console.error(`   Try: kill $(lsof -t -i:${WS_PORT}) or restart your terminal.`);
+    } else {
+        console.error("WebSocketServer error:", err);
+    }
+    process.exit(1);
+});
+
 wss.on("connection", (ws, req) => {
     console.log('🔌 New WebSocket connection');
-
-    UserManager.getInstance().addUser(ws, "guest");
 
     const clientIp = getClientIp(req);
     if (!checkConnectionLimit(clientIp)) {
@@ -86,6 +94,8 @@ wss.on("connection", (ws, req) => {
         ws.close(4008, "Rate limit exceeded");
         return;
     }
+
+    UserManager.getInstance().addUser(ws, "guest");
 
     ws.on("message", async (rawMessage) => {
         try {
@@ -108,6 +118,9 @@ wss.on("connection", (ws, req) => {
                     ws.send(JSON.stringify({ error: "Invalid or expired ticket" }));
                     return;
                 }
+
+                // Upgrade the connection's authId from 'guest' to the real userId
+                UserManager.getInstance().upgradeUserId(ws, payload.userId);
 
                 ws.send(JSON.stringify({
                     type: "AUTH_SUCCESS",

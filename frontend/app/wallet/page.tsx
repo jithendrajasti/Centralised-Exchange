@@ -52,10 +52,22 @@ export default function WalletPage() {
     });
   };
 
+  const MIN_AMOUNT = 1;
+  const MAX_AMOUNT = 50000;
+
   const handleAddFunds = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    const numAmount = Number(amount);
+    if (!amount || isNaN(numAmount) || numAmount <= 0) {
       toast.error("Please enter a valid amount");
+      return;
+    }
+    if (numAmount < MIN_AMOUNT) {
+      toast.error(`Minimum deposit is ₹${MIN_AMOUNT}`);
+      return;
+    }
+    if (numAmount > MAX_AMOUNT) {
+      toast.error(`Maximum deposit is ₹${MAX_AMOUNT.toLocaleString()}`);
       return;
     }
 
@@ -74,7 +86,7 @@ export default function WalletPage() {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_placeholder",
         amount: orderAmount * 100, // in paise
         currency: "INR",
-        name: "Backpack Exchange",
+        name: "CEX Exchange",
         description: "Add Funds to Wallet",
         order_id: orderId,
         handler: async function (response: any) {
@@ -199,10 +211,13 @@ export default function WalletPage() {
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                     placeholder="Enter amount"
-                    min="1"
+                    min={MIN_AMOUNT}
+                    max={MAX_AMOUNT}
+                    step="1"
                     className="block w-full pl-8 pr-3 py-2.5 bg-bp-bg-primary border border-bp-border rounded-lg text-bp-text-primary text-sm focus:outline-none focus:border-bp-red transition-colors"
                   />
                 </div>
+                <p className="text-2xs text-bp-text-tertiary mt-1">Min ₹{MIN_AMOUNT} — Max ₹{MAX_AMOUNT.toLocaleString()}</p>
               </div>
 
               <button

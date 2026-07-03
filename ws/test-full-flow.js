@@ -15,7 +15,7 @@ ws.on('open', () => {
     
     const subscribeMsg = {
         method: "SUBSCRIBE",
-        params: ["depth.TATA_INR", "ticker.TATA_INR", "trade.TATA_INR"]
+        params: ["depth.SOL_USDC", "ticker.SOL_USDC", "trade.SOL_USDC"]
     };
     
     console.log('📤 Sending subscription:', JSON.stringify(subscribeMsg, null, 2));
@@ -44,7 +44,7 @@ redisClient.connect().then(() => {
     console.log('✅ Redis connected');
     
     // Subscribe to all channels
-    const channels = ['depth.TATA_INR', 'ticker.TATA_INR', 'trade.TATA_INR'];
+    const channels = ['depth.SOL_USDC', 'ticker.SOL_USDC', 'trade.SOL_USDC'];
     
     channels.forEach(channel => {
         redisClient.subscribe(channel, (message) => {
@@ -63,7 +63,7 @@ setTimeout(() => {
     console.log('\n4️⃣ Publishing test message to Redis...');
     
     const testMessage = {
-        stream: "depth.TATA_INR",
+        stream: "depth.SOL_USDC",
         data: {
             a: [["1005.5", "1.7"]],
             b: [["994.2", "4.0"]],
@@ -71,8 +71,8 @@ setTimeout(() => {
         }
     };
     
-    redisClient.publish('depth.TATA_INR', JSON.stringify(testMessage));
-    console.log('📤 Published test message to depth.TATA_INR');
+    redisClient.publish('depth.SOL_USDC', JSON.stringify(testMessage));
+    console.log('📤 Published test message to depth.SOL_USDC');
     
 }, 2000);
 

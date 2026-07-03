@@ -6,10 +6,10 @@ const MARKET = "SOL_USDC";
 
 // Virtual traders simulating different market participants
 const TRADERS = {
-    MARKET_MAKER: "5",      // Provides liquidity
-    MOMENTUM_TRADER: "6",   // Follows trends
-    MEAN_REVERTER: "7",     // Bets on price returning to average
-    SCALPER: "8",           // Quick small trades
+    MARKET_MAKER: "00000000-0000-0000-0000-000000000005",
+    MOMENTUM_TRADER: "00000000-0000-0000-0000-000000000006",
+    MEAN_REVERTER: "00000000-0000-0000-0000-000000000007",
+    SCALPER: "00000000-0000-0000-0000-000000000008",
 };
 
 const INITIAL_BALANCE = 50000000; // 50M per trader
@@ -348,7 +348,29 @@ console.log(`📍 Market: ${MARKET} | Base: $${BASE_PRICE} | ±$${PRICE_VOLATILI
 console.log(`⏱️  Cycle: ${CYCLE_INTERVAL}ms | Liquidity: ${LIQUIDITY_ORDERS} levels/side`);
 console.log('═'.repeat(55) + '\n');
 
-main().catch(error => {
-    console.error('💥 Fatal:', error);
+// Start with exponential backoff retry so MM waits for API startup
+async function startWithRetry() {
+    let attempt = 0;
+    const MAX_DELAY_MS = 30_000;
+
+    while (!isShuttingDown) {
+        try {
+            await main();
+            // If main exits cleanly (e.g. shutdown), stop retrying
+            break;
+        } catch (error) {
+            attempt++;
+            const delay = Math.min(2000 * Math.pow(2, attempt - 1), MAX_DELAY_MS);
+            console.error(`💥 Market Maker crashed (attempt ${attempt}). Retrying in ${delay / 1000}s...`);
+            console.error('Error:', error instanceof Error ? error.message : String(error));
+            if (!isShuttingDown) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+}
+
+startWithRetry().catch(error => {
+    console.error('💥 Fatal (non-recoverable):', error);
     process.exit(1);
 });

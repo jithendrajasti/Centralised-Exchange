@@ -93,10 +93,7 @@ razorpayRouter.post("/verify", authenticate, requireRoles(["user", "admin"]), as
             .digest("hex");
 
         if (expectedSignature !== razorpay_signature) {
-            // For mock/development without real razorpay, we might want to bypass signature check if the signature is "mock_signature"
-            if (process.env.NODE_ENV !== "development" || razorpay_signature !== "mock_signature") {
-                throw new Error("Invalid signature");
-            }
+            throw new Error("Invalid signature");
         }
 
         // Update DB status to success

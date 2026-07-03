@@ -3,10 +3,18 @@ import { Router } from "express";
 import { RedisManager } from "../RedisManager";
 import { GET_DEPTH } from "../types";
 import { parseMarketSymbol } from "../utils/validation";
+import { createRateLimiter } from "../middleware/rateLimit";
 
 export const depthRouter = Router();
 
-depthRouter.get("/", async (req, res) => {
+const publicReadLimiter = createRateLimiter({
+    keyPrefix: "rl:depth:read",
+    max: 600,
+    windowSeconds: 60,
+    keyGenerator: (req) => req.ip || "unknown",
+});
+
+depthRouter.get("/", publicReadLimiter, async (req, res) => {
     try {
         const { symbol } = req.query;
         if (!symbol) {

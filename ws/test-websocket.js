@@ -7,10 +7,10 @@ const ws = new WebSocket('ws://localhost:3001');
 ws.on('open', () => {
     console.log('✅ Connected to WebSocket server');
     
-    // Subscribe to TATA_INR depth updates
+    // Subscribe to SOL_USDC depth updates
     const subscribeMsg = {
         method: "SUBSCRIBE",
-        params: ["depth.TATA_INR"]
+        params: ["depth.SOL_USDC"]
     };
     
     console.log('📤 Sending subscription:', subscribeMsg);

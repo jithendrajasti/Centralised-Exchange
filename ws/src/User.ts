@@ -18,7 +18,7 @@ const HEARTBEAT_INTERVAL = 30_000; // 30 seconds
 export class User {
     private id: string;
     private userId: string;
-    private ws: WebSocket;
+    public ws: WebSocket;
     private subscriptions: string[] = [];
     private alive: boolean = true;
     private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -37,6 +37,11 @@ export class User {
 
     public unsubscribe(subscription: string) {
         this.subscriptions = this.subscriptions.filter(s => s !== subscription);
+    }
+
+    /** Upgrade userId after successful ticket auth */
+    public setAuthId(newUserId: string) {
+        this.userId = newUserId;
     }
 
     emit(message: OutgoingMessage) {

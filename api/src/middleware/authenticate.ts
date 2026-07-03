@@ -18,7 +18,13 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     const internalServiceToken = process.env.INTERNAL_SERVICE_TOKEN;
     const providedInternalToken = req.header("x-internal-service-token");
 
-    if (internalServiceToken && providedInternalToken === internalServiceToken) {
+    // Only allow internal token auth if the token is configured and long enough
+    if (
+        internalServiceToken &&
+        internalServiceToken.length >= 32 &&
+        providedInternalToken &&
+        providedInternalToken === internalServiceToken
+    ) {
         const internalUserId = req.header("x-internal-user-id") || (req.query.userId as string | undefined) || (req.body as any)?.userId || "internal-service";
         req.auth = {
             userId: String(internalUserId),

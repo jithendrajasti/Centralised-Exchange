@@ -289,6 +289,14 @@ export async function getOpenOrders(market: string): Promise<any[]> {
   });
 }
 
+export async function getOrderHistory(market?: string): Promise<any[]> {
+  return authRequest<any[]>({
+    method: "GET",
+    url: `${BASE_URL}/order/history`,
+    params: market ? { market } : undefined
+  });
+}
+
 export async function cancelOrder(orderId: string, market: string): Promise<any> {
   return authRequest<any>({
     method: "DELETE",
@@ -358,4 +366,31 @@ export async function forgotPassword(email: string): Promise<{ sent: boolean }> 
 export async function resetPassword(email: string, otp: string, newPassword: string): Promise<{ success: boolean }> {
   const response = await axios.post(`${AUTH_BASE_URL}/reset-password`, { email, otp, newPassword });
   return response.data;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Session Management Endpoints (P3-D)
+   ═══════════════════════════════════════════════════════════════ */
+
+export async function getSessions(): Promise<{
+  sessions: Array<{
+    sessionId: string;
+    ipAddress: string;
+    userAgent: string;
+    createdAt: string;
+    expiresAt: string;
+    isCurrent: boolean;
+  }>;
+}> {
+  return authRequest<any>({
+    method: "GET",
+    url: `${AUTH_BASE_URL}/sessions`,
+  });
+}
+
+export async function revokeSession(sessionId: string): Promise<{ success: boolean }> {
+  return authRequest<{ success: boolean }>({
+    method: "DELETE",
+    url: `${AUTH_BASE_URL}/sessions/${sessionId}`,
+  });
 }

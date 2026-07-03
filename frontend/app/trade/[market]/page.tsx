@@ -5,26 +5,10 @@ import { SwapUI } from "@/app/components/SwapUI";
 import { TradeView } from "@/app/components/TradeView";
 import { BookTradesTabs } from "@/app/components/BookTradesTabs";
 import { BottomPanel } from "@/app/components/BottomPanel";
+import { ErrorBoundary } from "@/app/components/ErrorBoundary";
 import { useParams } from "next/navigation";
 import { useEffect } from "react";
 import { useMarketStore } from "@/app/store/useMarketStore";
-
-/* ═══════════════════════════════════════════════════════════════
-   TradePage — Full Trading Interface Layout (Backpack Style)
-
-   Grid Layout:
-   ┌─────────────────────────────────────────────────┐
-   │                 Market Info Bar                  │
-   ├───────────────┬───────────┬─────────────────────┤
-   │               │           │                     │
-   │  Chart Area   │  Order    │  Trade Entry Panel   │
-   │  (flex-1)     │  Book     │  (w-[280px])        │
-   │               │  (w-[280px]) │                  │
-   │               │           │                     │
-   ├───────────────┴───────────┴─────────────────────┤
-   │          Bottom Panel (h-[200px])                │
-   └─────────────────────────────────────────────────┘
-   ═══════════════════════════════════════════════════════════════ */
 
 export default function TradePage() {
   const { market } = useParams();
@@ -37,30 +21,34 @@ export default function TradePage() {
 
   return (
     <div className="flex flex-col h-full bg-bp-bg-primary overflow-hidden">
-      {/* ═══ Market Info Bar ═══ */}
-      <MarketBar market={marketString} />
+      <ErrorBoundary componentName="MarketBar">
+        <MarketBar market={marketString} />
+      </ErrorBoundary>
 
-      {/* ═══ Main Trading Grid ═══ */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* ─── Left: Chart ─── */}
         <div className="flex-1 min-w-0 border-r border-bp-border">
-          <TradeView market={marketString} />
+          <ErrorBoundary componentName="Chart">
+            <TradeView market={marketString} />
+          </ErrorBoundary>
         </div>
 
-        {/* ─── Middle: Order Book & Trades ─── */}
         <div className="w-[280px] flex-shrink-0 border-r border-bp-border">
-          <BookTradesTabs market={marketString} />
+          <ErrorBoundary componentName="OrderBook">
+            <BookTradesTabs market={marketString} />
+          </ErrorBoundary>
         </div>
 
-        {/* ─── Right: Trade Entry ─── */}
         <div className="w-[280px] flex-shrink-0">
-          <SwapUI market={marketString} />
+          <ErrorBoundary componentName="TradeEntry">
+            <SwapUI market={marketString} />
+          </ErrorBoundary>
         </div>
       </div>
 
-      {/* ═══ Bottom Panel ═══ */}
       <div className="h-[200px] flex-shrink-0 border-t border-bp-border">
-        <BottomPanel market={marketString} />
+        <ErrorBoundary componentName="BottomPanel">
+          <BottomPanel market={marketString} />
+        </ErrorBoundary>
       </div>
     </div>
   );

@@ -16,7 +16,7 @@ async function testAPIDirect() {
         console.log('✅ Connected to PostgreSQL');
         
         // Test the exact query from the API
-        const market = 'TATA_INR';
+        const market = 'SOL_USDC';
         const interval = '1m';
         const startTime = 1729350000; // Current timestamp
         const endTime = 1729365000;
