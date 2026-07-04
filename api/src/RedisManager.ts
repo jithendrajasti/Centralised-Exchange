@@ -35,32 +35,37 @@ export class RedisManager {
         return this.instance;
     }
 
-    public sendAndAwait(message: MessageToEngine) {
+    public sendAndAwait(message: MessageToEngine): Promise<MessageFromOrderbook> {
+        const id = this.getRandomClientId();
+
         return new Promise<MessageFromOrderbook>((resolve, reject) => {
-            const id = this.getRandomClientId();
-            
-            // Add timeout to prevent hanging forever
             const timeout = setTimeout(() => {
-                this.client.unsubscribe(id);
-                reject(new Error('Engine response timeout - is the engine running?'));
-            }, 10000); // 10 second timeout
-            
-            this.client.subscribe(id, (message) => {
-                clearTimeout(timeout);
-                this.client.unsubscribe(id);
-                resolve(JSON.parse(message));
-            });
-            
-            // XADD pushes to the Redis Stream (persisted, replayable).
-            // The Engine will XACK this message ID after processing it.
-            // Stream name is "engine_messages" to distinguish from the old List "messages".
-            // MAXLEN ~10000: approximate trim keeps ~10min of messages at peak load.
-            this.publisher.xAdd(
-                "engine_messages",
-                "*",
-                { clientId: id, data: JSON.stringify(message) },
-                { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10000 } }
-            );
+                this.client.unsubscribe(id).catch(() => {});
+                reject(new Error("Engine response timeout - is the engine running?"));
+            }, 10000);
+
+            // Await the subscribe so the channel is fully registered before we
+            // publish the request. Without this, a fast engine response could
+            // arrive before the subscription is established, causing a 10s timeout.
+            this.client
+                .subscribe(id, (msg) => {
+                    clearTimeout(timeout);
+                    this.client.unsubscribe(id).catch(() => {});
+                    resolve(JSON.parse(msg));
+                })
+                .then(() => {
+                    return this.publisher.xAdd(
+                        "engine_messages",
+                        "*",
+                        { clientId: id, data: JSON.stringify(message) },
+                        { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10000 } }
+                    );
+                })
+                .catch((err) => {
+                    clearTimeout(timeout);
+                    this.client.unsubscribe(id).catch(() => {});
+                    reject(err);
+                });
         });
     }
 
