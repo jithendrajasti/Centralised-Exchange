@@ -1,2 +1,4 @@
 node_modules
 dist
+snapshot.json
+snapshot.tmp.json

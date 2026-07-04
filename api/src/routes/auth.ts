@@ -300,6 +300,7 @@ authRouter.post("/resend-otp", otpLimiter, async (req, res) => {
 
         return res.json({ sent: true });
     } catch (error: any) {
+        console.error(JSON.stringify({ event: "auth.resend-otp.error", message: error?.message }));
         return res.status(400).json({ error: error?.message || "Failed to send OTP" });
     }
 });
@@ -414,6 +415,7 @@ authRouter.get("/sessions", authenticate, requireRoles(["user", "admin"]), async
 
         return res.json({ sessions: sanitized });
     } catch (error: any) {
+        console.error(JSON.stringify({ event: "auth.sessions.get.error", message: error?.message }));
         return res.status(500).json({ error: "Failed to fetch sessions" });
     }
 });

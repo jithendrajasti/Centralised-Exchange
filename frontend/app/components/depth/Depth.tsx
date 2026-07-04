@@ -33,7 +33,7 @@ export function Depth({ market }: { market: string }) {
           getDepth(market),
           getTicker(market),
         ]);
-        setBids(depthData.bids.reverse());
+        setBids(depthData.bids);
         setAsks(depthData.asks);
         setPrice(tickerData.lastPrice);
         setPreviousPrice(tickerData.lastPrice);

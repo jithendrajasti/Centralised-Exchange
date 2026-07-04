@@ -21,7 +21,6 @@ export class ChartManager {
   private candleSeries: ISeriesApi<"Candlestick"> | null = null;
   private lineSeries: ISeriesApi<"Line"> | null = null;
   private chart: IChartApi;
-  private chartType: ChartType;
 
   constructor(
     ref: any,
@@ -29,8 +28,6 @@ export class ChartManager {
     layout: { background: string; color: string },
     chartType: ChartType = "candlestick"
   ) {
-    this.chartType = chartType;
-
     try {
       log("📊 Initializing chart with", initialData?.length || 0, "candles");
 

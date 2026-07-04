@@ -15,15 +15,18 @@ import Link from "next/link";
 export function MarketBar({ market }: { market: string }) {
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
+        setFetchError(false);
         const tickerData = await getTicker(market);
         setTicker(tickerData);
       } catch (err) {
         console.error("Failed to fetch market data:", err);
+        setFetchError(true);
       } finally {
         setLoading(false);
       }
@@ -58,7 +61,12 @@ export function MarketBar({ market }: { market: string }) {
     };
   }, [market]);
 
-  if (loading || !ticker) return <MarketBarSkeleton />;
+  if (loading) return <MarketBarSkeleton />;
+  if (fetchError || !ticker) return (
+    <div className="flex items-center h-[52px] px-4 bg-bp-bg-secondary border-b border-bp-border">
+      <span className="text-xs text-bp-text-tertiary">Failed to load market data</span>
+    </div>
+  );
 
   const isPositive = parseFloat(ticker.priceChangePercent || "0") >= 0;
   const [base = "", quote = ""] = market.split("_");

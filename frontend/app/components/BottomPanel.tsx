@@ -143,7 +143,7 @@ function BalancesTab() {
         tickers.forEach(t => {
           if (t.symbol.endsWith("_USDC")) {
             const base = t.symbol.split("_")[0];
-            priceMap[base] = parseFloat(t.lastPrice || "0");
+            if (base) priceMap[base] = parseFloat(t.lastPrice || "0");
           }
         });
 
@@ -347,8 +347,11 @@ function OrderHistoryTab({ market }: { market: string }) {
       .then((response) => {
         if (!cancelled) setOrders(response);
       })
-      .catch(() => {
-        if (!cancelled) setOrders([]);
+      .catch((e) => {
+        if (!cancelled) {
+          setOrders([]);
+          setEmptyMessage(e?.message || "Failed to load order history");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -402,16 +405,21 @@ function OrderHistoryTab({ market }: { market: string }) {
 function TradeHistoryTab({ market }: { market: string }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
+  const [emptyMessage, setEmptyMessage] = useState("No trade history");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setEmptyMessage("No trade history");
     getTrades(market)
       .then((res) => {
-        if (!cancelled) setTrades(res.slice(0, 50)); // Last 50 trades
+        if (!cancelled) setTrades(res.slice(0, 50));
       })
-      .catch(() => {
-        if (!cancelled) setTrades([]);
+      .catch((e) => {
+        if (!cancelled) {
+          setTrades([]);
+          setEmptyMessage(e?.message || "Failed to load trade history");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -432,7 +440,7 @@ function TradeHistoryTab({ market }: { market: string }) {
       </div>
 
       {loading && <EmptyState message="Loading trades..." />}
-      {!loading && trades.length === 0 && <EmptyState message="No trade history" />}
+      {!loading && trades.length === 0 && <EmptyState message={emptyMessage} />}
       {!loading && trades.length > 0 && (
         <div className="divide-y divide-bp-border">
           {trades.map((trade) => (

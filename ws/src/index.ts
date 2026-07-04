@@ -85,8 +85,10 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
     process.exit(1);
 });
 
+const DEBUG = process.env.NODE_ENV !== "production";
+
 wss.on("connection", (ws, req) => {
-    console.log('🔌 New WebSocket connection');
+    if (DEBUG) console.log("New WebSocket connection");
 
     const clientIp = getClientIp(req);
     if (!checkConnectionLimit(clientIp)) {
@@ -128,12 +130,13 @@ wss.on("connection", (ws, req) => {
                 }));
             }
         } catch (error) {
+            console.error("WS message error:", (error as Error).message);
             ws.send(JSON.stringify({ error: "Invalid message payload" }));
         }
     });
 
     ws.on("close", () => {
-        // Subscription cleanup is handled by UserManager.
+        if (DEBUG) console.log(`WS closed: ip=${clientIp}`);
     });
 });
 

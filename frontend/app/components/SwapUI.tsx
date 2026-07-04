@@ -44,6 +44,7 @@ export function SwapUI({ market }: { market: string }) {
       setBalances(response.balances || {});
     } catch (error) {
       console.error("Failed to fetch balances:", error);
+      toast.error("Could not refresh balances");
     }
   };
 
@@ -130,11 +131,18 @@ export function SwapUI({ market }: { market: string }) {
         const d = await getDepth(market);
         const topBid = d.bids?.[0]?.[0];
         const topAsk = d.asks?.[0]?.[0];
-        // For market buy, we cross the spread up to a high limit.
-        // For market sell, we cross the spread down to 0.
-        submitPrice = side === "buy" ? (topAsk ? (parseFloat(topAsk) * 1.05).toFixed(2) : "99999999") : (topBid ? (parseFloat(topBid) * 0.95).toFixed(2) : "0");
+
+        if (side === "buy") {
+          if (!topAsk) { toast.error("No sell orders available"); setIsSubmitting(false); return; }
+          submitPrice = (parseFloat(topAsk) * 1.05).toFixed(2);
+        } else {
+          if (!topBid) { toast.error("No buy orders available"); setIsSubmitting(false); return; }
+          submitPrice = (parseFloat(topBid) * 0.95).toFixed(2);
+        }
       } catch {
-        submitPrice = side === "buy" ? "99999999" : "0";
+        toast.error("Failed to fetch market price");
+        setIsSubmitting(false);
+        return;
       }
     } else {
       if (!price || parseFloat(price) <= 0) {
@@ -413,15 +421,3 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Checkbox */
-function Checkbox({ label }: { label: string }) {
-  return (
-    <label className="flex items-center gap-1.5 text-2xs cursor-pointer">
-      <input
-        type="checkbox"
-        className="w-3 h-3 rounded border-bp-border bg-bp-bg-tertiary accent-bp-blue"
-      />
-      <span className="text-bp-text-tertiary">{label}</span>
-    </label>
-  );
-}
