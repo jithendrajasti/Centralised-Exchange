@@ -24,6 +24,13 @@ const createOrderLimiter = createRateLimiter({
     keyGenerator: (req) => req.auth?.userId || req.ip || "unknown",
 });
 
+const verifyLimiter = createRateLimiter({
+    keyPrefix: "rl:razorpay:verify",
+    max: 20,
+    windowSeconds: 60,
+    keyGenerator: (req) => req.auth?.userId || req.ip || "unknown",
+});
+
 razorpayRouter.post("/create-order", authenticate, requireRoles(["user", "admin"]), createOrderLimiter, async (req, res) => {
     const userId = req.auth!.userId;
     try {
@@ -77,7 +84,7 @@ razorpayRouter.post("/create-order", authenticate, requireRoles(["user", "admin"
     }
 });
 
-razorpayRouter.post("/verify", authenticate, requireRoles(["user", "admin"]), async (req, res) => {
+razorpayRouter.post("/verify", authenticate, requireRoles(["user", "admin"]), verifyLimiter, async (req, res) => {
     const userId = req.auth!.userId;
     try {
         const razorpay_order_id = parseRequiredString(req.body?.razorpay_order_id, "razorpay_order_id");
@@ -92,7 +99,15 @@ razorpayRouter.post("/verify", authenticate, requireRoles(["user", "admin"]), as
             .update(body.toString())
             .digest("hex");
 
-        if (expectedSignature !== razorpay_signature) {
+        const expectedBuf = Buffer.from(expectedSignature, "hex");
+        const receivedBuf = Buffer.from(razorpay_signature, "hex");
+        const signaturesMatch =
+            expectedBuf.length === receivedBuf.length &&
+            crypto.timingSafeEqual(
+                Uint8Array.from(expectedBuf),
+                Uint8Array.from(receivedBuf)
+            );
+        if (!signaturesMatch) {
             throw new Error("Invalid signature");
         }
 
