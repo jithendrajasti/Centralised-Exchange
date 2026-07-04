@@ -15,22 +15,28 @@ axios.defaults.withCredentials = true;
 if (DEBUG) {
   axios.interceptors.request.use(
     (config) => {
-      console.log('🚀 API Request:', config.method?.toUpperCase(), config.url);
+      console.log('API Request:', config.method?.toUpperCase(), config.url);
       return config;
     },
     (error) => {
-      console.error('❌ Request Error:', error);
+      console.warn('Request Error:', error.message);
       return Promise.reject(error);
     }
   );
 
   axios.interceptors.response.use(
     (response) => {
-      console.log('✅ API Response:', response.status, response.config.url);
+      console.log('API Response:', response.status, response.config.url);
       return response;
     },
     (error) => {
-      console.error('❌ API Error:', error.response?.status, error.config?.url, error.message);
+      // Network errors have no response — use warn so the Next.js dev overlay
+      // doesn't pop up just because the API server isn't running yet.
+      if (!error.response) {
+        console.warn('API Network Error:', error.config?.url, error.message);
+      } else {
+        console.error('API Error:', error.response.status, error.config?.url, error.message);
+      }
       return Promise.reject(error);
     }
   );

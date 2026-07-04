@@ -23,7 +23,7 @@ export default function MarketsPage() {
 
   useEffect(() => {
     setLoading(true);
-    getTickers().then((data) => { setTickers(data); setLoading(false); });
+    getTickers().then((data) => { setTickers(data); setLoading(false); }).catch(() => setLoading(false));
 
     SignalingManager.getInstance().registerCallback("ticker.all", (data: Partial<Ticker>) => {
       setTickers((prev) => {

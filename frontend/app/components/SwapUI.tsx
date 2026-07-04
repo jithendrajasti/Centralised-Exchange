@@ -49,7 +49,7 @@ export function SwapUI({ market }: { market: string }) {
   };
 
   useEffect(() => {
-    getTicker(market).then((t) => setPrice(t.lastPrice));
+    getTicker(market).then((t) => setPrice(t.lastPrice)).catch(() => {});
     if (isAuthenticated) {
       refreshBalances();
     }
