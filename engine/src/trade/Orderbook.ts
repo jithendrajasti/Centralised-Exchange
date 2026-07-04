@@ -184,13 +184,17 @@ export class Orderbook {
         let executedQty = 0;
 
         for (let i = 0; i < this.asks.length; i++) {
+            // Asks are sorted ascending — no price can cross once we pass the bid price
+            if (this.asks[i].price > order.price) break;
+
             // Self-trade prevention: Skip orders from the same user
             if (this.asks[i].userId === order.userId) {
                 continue;
             }
-            
-            if (this.asks[i].price <= order.price && executedQty < order.quantity) {
-                const filledQty = Math.min((order.quantity - executedQty), this.asks[i].quantity);
+
+            if (executedQty < order.quantity) {
+                const remaining = this.asks[i].quantity - this.asks[i].filled;
+                const filledQty = Math.min((order.quantity - executedQty), remaining);
                 executedQty += filledQty;
                 this.asks[i].filled += filledQty;
                 this.applyDepthDelta("asks", this.asks[i].price, -filledQty);
@@ -221,15 +225,19 @@ export class Orderbook {
     matchAsk(order: Order): {fills: Fill[], executedQty: number} {
         const fills: Fill[] = [];
         let executedQty = 0;
-        
+
         for (let i = 0; i < this.bids.length; i++) {
+            // Bids are sorted descending — no price can cross once we pass the ask price
+            if (this.bids[i].price < order.price) break;
+
             // Self-trade prevention: Skip orders from the same user
             if (this.bids[i].userId === order.userId) {
                 continue;
             }
-            
-            if (this.bids[i].price >= order.price && executedQty < order.quantity) {
-                const amountRemaining = Math.min(order.quantity - executedQty, this.bids[i].quantity);
+
+            if (executedQty < order.quantity) {
+                const remaining = this.bids[i].quantity - this.bids[i].filled;
+                const amountRemaining = Math.min(order.quantity - executedQty, remaining);
                 executedQty += amountRemaining;
                 this.bids[i].filled += amountRemaining;
                 this.applyDepthDelta("bids", this.bids[i].price, -amountRemaining);
@@ -274,6 +282,10 @@ export class Orderbook {
                 fromScaledToDecimal(this.depthAsks[price])
             ]);
         }
+
+        // Bids: highest price first. Asks: lowest price first.
+        bids.sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
+        asks.sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
 
         return {
             bids,
