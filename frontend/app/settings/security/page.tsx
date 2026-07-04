@@ -189,7 +189,7 @@ export default function SecurityPage() {
       {/* Security tips */}
       <div className="mt-6 p-4 bg-bp-bg-secondary border border-bp-border rounded-xl text-xs text-bp-text-tertiary space-y-1">
         <p className="font-medium text-bp-text-secondary">Security Tips</p>
-        <p>• If you see a session you don't recognize, revoke it immediately and change your password.</p>
+        <p>• If you see a session you don&apos;t recognize, revoke it immediately and change your password.</p>
         <p>• Sessions expire automatically after 7 days of inactivity.</p>
         <p>• Use a strong, unique password and enable 2FA when available.</p>
       </div>

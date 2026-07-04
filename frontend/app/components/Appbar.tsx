@@ -216,7 +216,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
             <div className="p-4 text-center text-xs text-bp-text-tertiary">Loading markets...</div>
           ) : filtered.length === 0 ? (
             <div className="p-4 text-center text-xs text-bp-text-tertiary">
-              No markets found for "{query}"
+              No markets found for &quot;{query}&quot;
             </div>
           ) : (
             <div>
