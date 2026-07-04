@@ -25,8 +25,8 @@ const KLINE_INTERVALS = [
 // The API uses bcrypt, so we need to pre-hash with bcrypt compatible $2b$ format.
 // Since we can't run bcrypt at seed time without the library, we seed via SQL with
 // a known bcrypt hash for "Test1234!" pre-computed here.
-// bcrypt.hash("Test1234!", 10) = $2b$10$... (hardcoded pre-computed value)
-const TEST_USER_PASSWORD_HASH = "$2b$10$K7L1OJ45/4Y2nIvhRVpCe.FgkCnpnPxnVzA1ekWwYwJXGzM3Dw5Yy";
+// bcrypt.hash("Test1234!", 10) = $2a$10$... (hardcoded pre-computed value)
+const TEST_USER_PASSWORD_HASH = "$2a$10$xMnWEYn3DhAQlo3faGclS.xv9R8xsE51ysEN8y8RGzd2jyJOpTsaW";
 // Note: This is a valid bcrypt hash for "Test1234!" with 10 rounds.
 // Generated via: require('bcrypt').hashSync('Test1234!', 10)
 
