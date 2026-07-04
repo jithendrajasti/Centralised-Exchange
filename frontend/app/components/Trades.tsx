@@ -17,10 +17,12 @@ export function Trades({ market }: { market: string }) {
 
   useEffect(() => {
     setLoading(true);
-    getTrades(market).then((initialTrades) => {
-      setTrades(initialTrades.slice(0, 50));
-      setLoading(false);
-    });
+    getTrades(market)
+      .then((initialTrades) => {
+        setTrades(initialTrades.slice(0, 50));
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
 
     /* ─── Real-time Trade Updates ─── */
     const callbackId = `TRADES-${market}`;
