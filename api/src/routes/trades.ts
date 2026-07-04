@@ -70,7 +70,7 @@ tradesRouter.get("/", publicReadLimiter, async (req, res) => {
         
         res.json(trades);
     } catch (err) {
-        console.error("Error fetching trades:", err);
+        console.error(JSON.stringify({ event: "trades.fetch.error", message: (err as Error).message, stack: (err as Error).stack }));
         res.status(500).json({ error: "Internal server error" });
     }
 });
