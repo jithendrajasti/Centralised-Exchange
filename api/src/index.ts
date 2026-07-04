@@ -30,7 +30,7 @@ app.set("trust proxy", true);
 /* ─── Middleware ─── */
 const corsOrigin = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(",").map(origin => origin.trim())
-    : true;
+    : ["http://localhost:3005", "http://localhost:3000"];
 
 app.use(cors({
     origin: corsOrigin,
@@ -50,7 +50,16 @@ app.use((req, res, next) => {
         }
 
         const durationMs = Date.now() - startedAt;
-        console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs}ms id=${requestId}`);
+        console.log(JSON.stringify({
+            ts: new Date().toISOString(),
+            level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info",
+            method: req.method,
+            path: req.originalUrl,
+            status: res.statusCode,
+            durationMs,
+            requestId,
+            ip: req.ip,
+        }));
     });
 
     next();
