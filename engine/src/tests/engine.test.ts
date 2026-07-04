@@ -14,6 +14,10 @@ vi.mock("../RedisManager", () => ({
 }));
 
 
+// Pre-seeded test user IDs from Engine.setBaseBalances()
+const TRADER_ID = "00000000-0000-0000-0000-000000000009"; // 1M USDC, 10K SOL
+const MM_ID     = "00000000-0000-0000-0000-000000000005"; // 50M USDC, 50M SOL
+
 describe("Engine", () => {
     it("Publishes Trade updates", () => {
         const engine = new Engine();
@@ -26,7 +30,7 @@ describe("Engine", () => {
                     price: "1000",
                     quantity: "1",
                     side: "buy",
-                    userId: "1"
+                    userId: TRADER_ID
                 }
             },
             clientId: "1"
@@ -37,15 +41,15 @@ describe("Engine", () => {
                 type: CREATE_ORDER,
                 data: {
                     market: "SOL_USDC",
-                    price: "1001",
+                    price: "999",
                     quantity: "1",
                     side: "sell",
-                    userId: "2"
+                    userId: MM_ID
                 }
             },
             clientId: "1"
         });
-        
+
         expect(publishSpy).toHaveBeenCalledTimes(2);
 
     });
@@ -62,7 +66,7 @@ describe("Engine", () => {
                     price: "1000",
                     quantity: "1",
                     side: "buy",
-                    userId: "1"
+                    userId: TRADER_ID
                 }
             },
             clientId: "1"
@@ -76,7 +80,7 @@ describe("Engine", () => {
                     price: "1000",
                     quantity: "1",
                     side: "sell",
-                    userId: "2"
+                    userId: MM_ID
                 }
             },
             clientId: "1"
