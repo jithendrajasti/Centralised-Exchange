@@ -14,7 +14,7 @@ interface State {
 }
 
 /**
- * ErrorBoundary — catches render errors in child components.
+ * ErrorBoundary - catches render errors in child components.
  *
  * Usage:
  *   <ErrorBoundary componentName="OrderBook">
